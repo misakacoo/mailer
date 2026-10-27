@@ -10,7 +10,6 @@ import {
   InputNumber,
   Modal,
   Popconfirm,
-  Progress,
   Row,
   Select,
   Space,
@@ -63,12 +62,6 @@ interface ChannelRow {
   lastOkAt: string | null;
   lastSentAt: string | null;
   hasPassword: boolean;
-  accountKey: string;
-  accountChannelCount: number;
-  sharedQuota: boolean;
-  accountLimit: number;
-  accountUsed: number;
-  accountRemaining: number;
 }
 
 interface Preset {
@@ -236,12 +229,8 @@ export default function Channels() {
         await api(`/channels/${editing.id}`, { method: 'PATCH', body: JSON.stringify(body) });
         message.success('已保存');
       } else {
-        const created = await api<ChannelRow>('/channels', { method: 'POST', body: JSON.stringify(body) });
-        message.success(
-          created.sharedQuota
-            ? `已添加发件邮箱；该 SMTP 账号已有 ${created.accountChannelCount} 个发件邮箱，共用 ${created.accountLimit} 封/天`
-            : '已添加发件邮箱',
-        );
+        await api<ChannelRow>('/channels', { method: 'POST', body: JSON.stringify(body) });
+        message.success('已添加发件邮箱');
       }
       setFormOpen(false);
       await load();
@@ -321,8 +310,8 @@ export default function Channels() {
 
   const duplicate = async (row: ChannelRow) => {
     try {
-      const created = await api<ChannelRow>(`/channels/${row.id}/duplicate`, { method: 'POST' });
-      message.success(`已复制；配额仍与同账号的 ${created.accountChannelCount} 个发件邮箱共享`);
+      await api<ChannelRow>(`/channels/${row.id}/duplicate`, { method: 'POST' });
+      message.success('已复制为一个新的发件邮箱');
       await load();
     } catch (e: any) {
       message.error(e?.message ?? '复制失败');
@@ -370,34 +359,17 @@ export default function Channels() {
       ),
     },
     {
-      title: '账号今日配额',
-      width: 200,
-      render: (_: unknown, r: ChannelRow) => {
-        const percent = Math.min(100, Math.round((r.sentToday / Math.max(1, r.dailyLimit)) * 100));
-        return (
-          <Space direction="vertical" size={2} style={{ width: '100%' }}>
-            <Progress
-              percent={percent}
-              size="small"
-              showInfo={false}
-              status={r.remaining === 0 ? 'exception' : 'normal'}
-            />
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12 }}>
-              <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-                {r.sentToday} / {r.dailyLimit}
-              </span>
-              <span style={{ color: r.remaining === 0 ? tokens.destructive : tokens.muted }}>
-                剩 {r.remaining}
-              </span>
-            </div>
-            {r.sharedQuota && (
-              <span style={{ fontSize: 11, color: tokens.muted }}>
-                与另外 {r.accountChannelCount - 1} 个发件邮箱共享额度
-              </span>
-            )}
-          </Space>
-        );
-      },
+      title: '今日配额',
+      width: 170,
+      render: (_: unknown, r: ChannelRow) => (
+        // 只给数字：条的长度取决于上限，读者无法据此比较两个邮箱，纯属噪音
+        <div style={{ display: 'flex', gap: 8, fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
+          <span style={{ color: tokens.ink }}>
+            {r.sentToday} / {r.dailyLimit}
+          </span>
+          <span style={{ color: r.remaining === 0 ? tokens.destructive : tokens.muted }}>剩 {r.remaining}</span>
+        </div>
+      ),
     },
     {
       title: '状态',
@@ -474,7 +446,6 @@ export default function Channels() {
     },
   ];
 
-  const accountCount = new Set(rows.map((r) => r.accountKey)).size;
   const shownRows =
     groupFilter === 'all'
       ? rows
@@ -497,7 +468,7 @@ export default function Channels() {
     <div className="page">
       <PageHeader
         title="发件账号"
-        desc={`共 ${rows.length} 个发件邮箱 · ${accountCount} 个真实 SMTP 账号。左侧选分组，任务里按分组选号`}
+        desc={`共 ${rows.length} 个发件邮箱，每个独立配置每日上限。左侧按分组筛选，任务里按分组选号`}
         extra={
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新增发件邮箱
@@ -624,7 +595,7 @@ export default function Channels() {
         <Col span={20}>
           <Section
             title={activeGroupName}
-            desc={`配额按真实 SMTP 账号计算：同一个账号下的多个发件邮箱共用一本每日额度。发送节奏由任务里的间隔设置决定，这里不再单独配置。`}
+            desc="每个发件邮箱独立计数，各自有每日上限；发送节奏由任务里的间隔设置决定"
             style={{ height: '100%' }}
           >
             <Card className="card-table" style={{ height: '100%' }}>
@@ -633,7 +604,7 @@ export default function Channels() {
                 loading={loading}
                 dataSource={shownRows}
                 columns={columns as any}
-                scroll={{ x: 930 }}
+                scroll={{ x: 900 }}
                 tableLayout="fixed"
                 pagination={false}
                 locale={{ emptyText: '还没有发件邮箱，点右上角「新增发件邮箱」' }}
@@ -692,7 +663,7 @@ export default function Channels() {
             label="SMTP 用户名"
             name="username"
             rules={[{ required: true, message: '请填写用户名' }]}
-            extra="同一服务器 + 用户名会被识别为同一个真实账号，共享每日配额"
+            extra="用于 SMTP 登录，通常是完整邮箱地址"
           >
             <Input placeholder="通常是完整邮箱地址" autoComplete="off" />
           </Form.Item>
@@ -729,7 +700,7 @@ export default function Channels() {
               label="账号每日上限"
               name="dailyLimit"
               style={{ flex: 1, marginRight: 8 }}
-              extra="同一账号共享；修改会同步到该账号下所有发件邮箱"
+              extra="这个邮箱每天最多发多少封"
             >
               <InputNumber min={1} max={100000} style={{ width: '100%' }} addonAfter="封/天" />
             </Form.Item>

@@ -2,11 +2,11 @@ import { Inject, Injectable } from '@nestjs/common';
 import { X509Certificate } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { groupAccounts } from '../common/accounts';
 import { APP_CONFIG, AppConfig } from '../common/config';
 import { PrismaService } from '../common/prisma.service';
 import { calendarDay } from '../common/quota';
 import { log } from '../common/logger';
+import { isSameCalendarDay } from '../common/quota';
 
 /** 只用于展示的日期格式，不参与任何计算 */
 function fmtDate(d: Date): string {
@@ -390,15 +390,17 @@ export class OpsService {
 
   private async todayQuota() {
     const day = calendarDay();
-    // 必须取全部通道再聚合：暂停/异常通道今天已经发出去的额度仍然算数，
-    // 只看 active 会把账号已用额度算少。
+    // 一条记录就是一个发件邮箱；额度只统计可用的那些，已发数按各自本地计数
     const channels = await this.prisma.channel.findMany();
-    const activePools = [...groupAccounts(channels, day).values()].filter((p) => p.status === 'active');
-    const limit = activePools.reduce((sum, p) => sum + p.limit, 0);
-    const used = activePools.reduce((sum, p) => sum + p.used, 0);
+    const activeChannels = channels.filter((c) => c.status === 'active');
+    const limit = activeChannels.reduce((sum, c) => sum + c.dailyLimit, 0);
+    const used = activeChannels.reduce(
+      (sum, c) => sum + (isSameCalendarDay(c.quotaDate, day) ? Math.max(0, c.sentToday) : 0),
+      0,
+    );
     return {
       day,
-      accounts: activePools.length,
+      activeAccounts: activeChannels.length,
       limit,
       used,
       remaining: Math.max(0, limit - used),

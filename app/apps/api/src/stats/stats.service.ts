@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { AccountPool, accountKey, groupAccounts } from '../common/accounts';
 import { PrismaService } from '../common/prisma.service';
 import { calendarDay, dayStartUtc, addDays, recentDays } from '../common/quota';
+import { isSameCalendarDay } from '../common/quota';
 
 export type AlertLevel = 'error' | 'warn' | 'info';
 
@@ -116,12 +116,12 @@ export class StatsService {
       }),
     ]);
 
-    // 配额按真实邮箱账号聚合：同一账号下的多条通道共享一本账，
-    // 不能把 3 条同账号通道加成 3 倍额度。
-    const accountPools = [...groupAccounts(channels, today).values()];
-    const activePools = accountPools.filter((p) => p.status === 'active');
-    const totalLimit = activePools.reduce((sum, p) => sum + p.limit, 0);
-    const quotaUsed = activePools.reduce((sum, p) => sum + p.used, 0);
+    // 一条记录就是一个发件邮箱：各自有独立的每日上限与已发计数
+    const todayUsed = (c: (typeof channels)[number]) =>
+      isSameCalendarDay(c.quotaDate, today) ? Math.max(0, c.sentToday) : 0;
+    const activeRows = channels.filter((c) => c.status === 'active');
+    const totalLimit = activeRows.reduce((sum, c) => sum + c.dailyLimit, 0);
+    const quotaUsed = activeRows.reduce((sum, c) => sum + todayUsed(c), 0);
 
     const counts: Record<string, number> = {};
     for (const g of queueGroups) counts[g.status] = g._count._all;
@@ -150,7 +150,15 @@ export class StatsService {
     const settled = wSent + wFailed;
 
     const alerts = this.buildAlerts({
-      accounts: accountPools,
+      accounts: channels.map((c) => ({
+        id: c.id,
+        fromEmail: c.fromEmail,
+        status: c.status,
+        limit: c.dailyLimit,
+        used: todayUsed(c),
+        consecutiveFailures: c.consecutiveFailures,
+        lastError: c.lastError,
+      })),
       quotaRemaining: totalLimit - quotaUsed,
       overdue,
       pending: counts.queued ?? 0,
@@ -168,12 +176,8 @@ export class StatsService {
         newContacts: todayNewContacts,
       },
       quota: {
-        // channels 是通道记录数，accounts 才是真实邮箱账号数；
-        // 额度只按 accounts 计算。
-        channels: channels.length,
-        activeChannels: channels.filter((c) => c.status === 'active').length,
-        accounts: accountPools.length,
-        activeAccounts: activePools.length,
+        total: channels.length,
+        active: activeRows.length,
         totalLimit,
         used: quotaUsed,
         remaining: Math.max(0, totalLimit - quotaUsed),
@@ -205,21 +209,19 @@ export class StatsService {
         opened: pct(windowOpened, wSent),
         clicked: pct(windowClicked, wSent),
       },
-      accounts: accountPools.map((p) => ({
-        id: p.channels[0].id,
-        name: p.label,
-        host: p.host,
-        username: p.username,
-        status: p.status,
-        used: p.used,
-        limit: p.limit,
-        remaining: p.remaining,
-        usedPct: pct(p.used, p.limit),
-        channelCount: p.channelCount,
-        consecutiveFailures: p.consecutiveFailures,
-        lastError: p.lastError,
-        lastErrorAt: p.lastErrorAt?.toISOString() ?? null,
-        lastOkAt: p.lastOkAt?.toISOString() ?? null,
+      accounts: channels.map((c) => ({
+        id: c.id,
+        fromEmail: c.fromEmail,
+        host: c.host,
+        username: c.username,
+        status: c.status,
+        used: todayUsed(c),
+        limit: c.dailyLimit,
+        remaining: Math.max(0, c.dailyLimit - todayUsed(c)),
+        consecutiveFailures: c.consecutiveFailures,
+        lastError: c.lastError,
+        lastErrorAt: c.lastErrorAt?.toISOString() ?? null,
+        lastOkAt: c.lastOkAt?.toISOString() ?? null,
       })),
       alerts,
       generatedAt: new Date().toISOString(),
@@ -301,22 +303,16 @@ export class StatsService {
       orderBy: { id: 'asc' },
     });
 
-    const pools = groupAccounts(channels, today);
-    const channelToAccount = new Map<number, string>();
-    for (const c of channels) channelToAccount.set(c.id, accountKey(c.host, c.username));
-
     const grouped = await this.prisma.recipient.groupBy({
       by: ['channelId', 'status'],
       where: { channelId: { not: null }, updatedAt: { gte: from } },
       _count: { _all: true },
     });
 
-    // 同一账号下多条通道的投递记录要合并，否则报表会把一个账号拆成几行
-    const map = new Map<string, { sent: number; failed: number; suppressed: number }>();
+    const map = new Map<number, { sent: number; failed: number; suppressed: number }>();
     for (const g of grouped) {
       if (g.channelId == null) continue;
-      const key = channelToAccount.get(g.channelId);
-      if (!key) continue;
+      const key = g.channelId;
       const m = map.get(key) ?? { sent: 0, failed: 0, suppressed: 0 };
       if (g.status === 'sent') m.sent += g._count._all;
       if (g.status === 'failed') m.failed += g._count._all;
@@ -324,28 +320,28 @@ export class StatsService {
       map.set(key, m);
     }
 
-    return [...pools.values()]
-      .map((p: AccountPool) => {
-        const m = map.get(p.key) ?? { sent: 0, failed: 0, suppressed: 0 };
+    return channels
+      .map((c) => {
+        const m = map.get(c.id) ?? { sent: 0, failed: 0, suppressed: 0 };
         const settled = m.sent + m.failed;
+        const used = isSameCalendarDay(c.quotaDate, today) ? Math.max(0, c.sentToday) : 0;
         return {
-          id: p.channels[0].id,
-          fromEmail: p.label,
-          host: p.host,
-          username: p.username,
-          status: p.status,
-          channelCount: p.channelCount,
-          usedToday: p.used,
-          dailyLimit: p.limit,
-          remaining: p.remaining,
+          id: c.id,
+          fromEmail: c.fromEmail,
+          host: c.host,
+          username: c.username,
+          status: c.status,
+          usedToday: used,
+          dailyLimit: c.dailyLimit,
+          remaining: Math.max(0, c.dailyLimit - used),
           // 窗口内的吞吐：按满配额算每天能发多少
           sent: m.sent,
           failed: m.failed,
           suppressed: m.suppressed,
           successRate: pct(m.sent, settled),
-          consecutiveFailures: p.consecutiveFailures,
-          lastError: p.lastError,
-          lastOkAt: p.lastOkAt?.toISOString() ?? null,
+          consecutiveFailures: c.consecutiveFailures,
+          lastError: c.lastError,
+          lastOkAt: c.lastOkAt?.toISOString() ?? null,
         };
       })
       .sort((a, b) => a.id - b.id);
@@ -444,7 +440,15 @@ export class StatsService {
   }
 
   private buildAlerts(input: {
-    accounts: AccountPool[];
+    accounts: {
+      id: number;
+      fromEmail: string;
+      status: string;
+      limit: number;
+      used: number;
+      consecutiveFailures: number;
+      lastError: string | null;
+    }[];
     quotaRemaining: number;
     overdue: number;
     pending: number;
@@ -458,21 +462,14 @@ export class StatsService {
         alerts.push({
           level: 'error',
           code: 'ACCOUNT_ERROR',
-          message: `发件账号「${a.label}」已被自动停用`,
+          message: `发件邮箱「${a.fromEmail}」已被自动停用`,
           hint: a.lastError ?? '连续发送失败达到阈值，请检查账号状态或密码后重新启用',
-        });
-      } else if (a.errorChannels > 0) {
-        alerts.push({
-          level: 'warn',
-          code: 'CHANNEL_ERROR',
-          message: `发件账号「${a.label}」下有 ${a.errorChannels} 条通道异常`,
-          hint: a.lastError ?? '同账号其他通道仍可发送；建议检查异常通道的密码与连接状态',
         });
       } else if (a.status === 'active' && a.consecutiveFailures >= 2) {
         alerts.push({
           level: 'warn',
           code: 'CHANNEL_DEGRADED',
-          message: `发件账号「${a.label}」连续失败 ${a.consecutiveFailures} 次`,
+          message: `发件邮箱「${a.fromEmail}」连续失败 ${a.consecutiveFailures} 次`,
           hint: a.lastError ?? '再有 1 次失败将被自动停用',
         });
       }
@@ -483,7 +480,7 @@ export class StatsService {
       alerts.push({
         level: 'error',
         code: 'NO_ACTIVE_ACCOUNT',
-        message: '没有任何可用的发件账号',
+        message: '没有任何可用的发件邮箱',
         hint: '所有账号都被停用或暂停，队列里的邮件不会发出',
       });
     } else if (active.length > 0 && input.quotaRemaining === 0) {

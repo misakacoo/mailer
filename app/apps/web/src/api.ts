@@ -69,14 +69,12 @@ export interface Alert {
 export interface Overview {
   today: { day: string; sent: number; opened: number; clicked: number; failed: number; newContacts: number };
   quota: {
-    channels: number;
-    activeChannels: number;
-    accounts: number;
-    activeAccounts: number;
+    /** 发件邮箱总数与可用数 */
+    total: number;
+    active: number;
     totalLimit: number;
     used: number;
     remaining: number;
-    usedPct: number;
   };
   queue: { pending: number; sending: number; overdue: number; failed: number; suppressed: number };
   totals: {
@@ -98,15 +96,13 @@ export interface Overview {
   };
   accounts: {
     id: number;
-    name: string;
+    fromEmail: string;
     host: string;
     username: string;
     status: string;
     used: number;
     limit: number;
     remaining: number;
-    usedPct: number;
-    channelCount: number;
     consecutiveFailures: number;
     lastError: string | null;
     lastErrorAt: string | null;

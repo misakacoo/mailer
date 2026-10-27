@@ -507,7 +507,7 @@ export default function Campaigns() {
 
   const estimateMinutes = useMemo(() => {
     if (estimateCount === 0) return 0;
-    // 发送节奏只由任务自己的间隔决定；通道没有独立间隔，服务商的硬限制由每日配额兜住
+    // 发送节奏只由任务自己的间隔决定；发件邮箱没有独立间隔，服务商的硬限制由每日配额兜住
     const gap = draft.sendIntervalMaxSec && draft.sendIntervalMaxSec > draft.sendIntervalSec
       ? (draft.sendIntervalSec + draft.sendIntervalMaxSec) / 2
       : draft.sendIntervalSec;
@@ -533,7 +533,7 @@ export default function Campaigns() {
         name: draft.name.trim(),
         templateId: draft.templateId,
         listIds: draft.listIds,
-        // 选了分组就不再按具体通道下发，避免两份约束互相打架
+        // 选了分组就不再按具体发件邮箱下发，避免两份约束互相打架
         channelIds: draft.channelGroupIds.length > 0 ? [] : draft.channelIds,
         channelGroupIds: draft.channelGroupIds,
         sendIntervalSec: draft.sendIntervalSec,
@@ -1092,18 +1092,18 @@ export default function Campaigns() {
                   const remaining = inGroup.reduce((s, c) => Math.max(s, c.remaining), 0);
                   return {
                     value: g.id,
-                    label: `${g.name}（${inGroup.length} 条通道，账号今日最多剩 ${remaining}）`,
+                    label: `${g.name}（${inGroup.length} 个发件邮箱，今日最多剩 ${remaining}）`,
                   };
                 })}
               />
               {channelGroups.length === 0 && (
                 <div style={{ fontSize: 12, color: tokens.muted, marginTop: 6 }}>
-                  还没有发件分组，请先到「发件账号」里把通道归组；不分组时任务会按配额自动分配。
+                  还没有发件分组，请先到「发件账号」里把发件邮箱归组；不分组时任务会按配额自动分配。
                 </div>
               )}
               {draft.channelIds.length > 0 && draft.channelGroupIds.length === 0 && (
                 <div style={{ fontSize: 12, color: tokens.warning, marginTop: 6 }}>
-                  该任务按具体通道指定（旧任务）：选择发件分组后会改为按分组下发。
+                  该任务按具体发件邮箱指定（旧任务）：选择发件分组后会改为按分组下发。
                 </div>
               )}
             </div>
@@ -1247,7 +1247,7 @@ export default function Campaigns() {
                         .map((g) => g.name)
                         .join('、')
                     : draft.channelIds.length
-                      ? `按通道指定（${draft.channelIds.length} 条）`
+                      ? `按发件邮箱指定（${draft.channelIds.length} 个）`
                       : '自动分配',
                 ],
                 [

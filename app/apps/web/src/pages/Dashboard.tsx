@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { App as AntApp, Button, Card, Col, Empty, Row, Spin, Tag } from 'antd';
+import { App as AntApp, Button, Card, Col, Empty, Row, Spin, Tag, Tooltip } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { api, Overview, TrendPoint } from '../api';
@@ -11,64 +11,57 @@ import { metrics, tokens } from '../theme';
 const REFRESH_MS = 30_000;
 
 /**
- * 数字块：标签 12 / 数值 26 / 附注 12。
- * 三行之间的间距固定为 8，卡片里无论换成哪组数字，垂直节奏都不变。
+ * 数字块：标签 / 数值 / 附注三行。
+ * 只用文字与数字表达进度，不画进度条——「还剩几封」这个信息本身就有数字，
+ * 再叠一根长度任意、刻度不明的条，除了制造噪音没有别的用处。
  */
-function Metric({
+function Stat({
   label,
   value,
   suffix,
   hint,
   tone = 'ink',
+  size = 'md',
+  align = 'left',
 }: {
   label: string;
   value: string | number;
   suffix?: string;
   hint?: React.ReactNode;
-  tone?: 'ink' | 'primary' | 'success' | 'destructive';
+  tone?: 'ink' | 'success' | 'destructive' | 'warning';
+  size?: 'md' | 'lg';
+  align?: 'left' | 'right';
 }) {
   const color =
-    tone === 'primary'
-      ? tokens.primary
-      : tone === 'success'
-        ? tokens.successDeep
-        : tone === 'destructive'
-          ? tokens.destructive
+    tone === 'success'
+      ? tokens.successDeep
+      : tone === 'destructive'
+        ? tokens.destructive
+        : tone === 'warning'
+          ? tokens.warning
           : tokens.ink;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div style={{ textAlign: align, minWidth: 0 }}>
       <div style={{ fontSize: 12, color: tokens.muted, lineHeight: 1.5 }}>{label}</div>
       <div
         style={{
           marginTop: metrics.tight,
-          fontSize: 26,
-          lineHeight: 1.25,
+          fontSize: size === 'lg' ? 32 : 22,
+          lineHeight: 1.2,
           fontWeight: 600,
           color,
           fontVariantNumeric: 'tabular-nums',
-          letterSpacing: '-0.01em',
+          letterSpacing: '-0.015em',
         }}
       >
         {value}
         {suffix && (
-          <span style={{ fontSize: 13, fontWeight: 400, color: tokens.muted, marginLeft: 4 }}>{suffix}</span>
+          <span style={{ fontSize: 12, fontWeight: 400, color: tokens.muted, marginLeft: 4 }}>{suffix}</span>
         )}
       </div>
       {hint && (
-        <div style={{ marginTop: 'auto', paddingTop: metrics.snug, fontSize: 12, lineHeight: 1.6, color: tokens.muted }}>
-          {hint}
-        </div>
+        <div style={{ marginTop: metrics.tight, fontSize: 12, lineHeight: 1.6, color: tokens.muted }}>{hint}</div>
       )}
-    </div>
-  );
-}
-
-/** 4px 细条，不用 AntD Progress —— 它默认带渐变和圆头，与零阴影的克制风格不符 */
-function Bar({ pct, color = tokens.primary }: { pct: number; color?: string }) {
-  const w = Math.max(0, Math.min(100, pct));
-  return (
-    <div style={{ height: 4, background: '#efefec', borderRadius: 2, overflow: 'hidden' }}>
-      <div style={{ width: `${w}%`, height: 4, background: color, borderRadius: 2, transition: 'width .3s' }} />
     </div>
   );
 }
@@ -84,20 +77,43 @@ function AlertRow({ level, message, hint }: { level: 'error' | 'warn' | 'info'; 
       <Tag bordered={false} style={{ marginInlineEnd: 0 }}>提示</Tag>
     );
   return (
-    <div
-      style={{
-        display: 'flex',
-        gap: metrics.snug,
-        padding: `14px ${metrics.cardPadding}px`,
-        alignItems: 'flex-start',
-      }}
-    >
+    <div style={{ display: 'flex', gap: metrics.snug, padding: `14px ${metrics.cardPadding}px`, alignItems: 'flex-start' }}>
       <div style={{ width: 3, alignSelf: 'stretch', background: color, borderRadius: 2, flex: '0 0 3px' }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, color: tokens.ink, lineHeight: 1.6 }}>{message}</div>
         {hint && <div style={{ fontSize: 12, color: tokens.muted, marginTop: 4, lineHeight: 1.6 }}>{hint}</div>}
       </div>
       {tag}
+    </div>
+  );
+}
+
+/** 数据带里的一段：左侧标签+数值，右侧同组第二指标 */
+function BandCell({
+  label,
+  value,
+  suffix,
+  hint,
+  tone,
+  last,
+}: {
+  label: string;
+  value: string | number;
+  suffix?: string;
+  hint?: React.ReactNode;
+  tone?: 'ink' | 'success' | 'destructive' | 'warning';
+  last?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        padding: `${metrics.cardPadding}px 0`,
+        paddingLeft: last ? metrics.cardPadding : 0,
+        paddingRight: metrics.cardPadding,
+        borderLeft: last ? `1px solid ${tokens.border}` : 'none',
+      }}
+    >
+      <Stat label={label} value={value} suffix={suffix} hint={hint} tone={tone} size="lg" />
     </div>
   );
 }
@@ -162,7 +178,9 @@ export default function Dashboard() {
   }
 
   const d = data!;
-  const quotaTone = d.quota.remaining === 0 ? 'destructive' : 'ink';
+  const quotaLeft = d.quota.remaining;
+  const quotaTone = quotaLeft === 0 ? 'destructive' : 'ink';
+  const deliverTone = d.rates.delivered >= 95 ? 'success' : d.rates.delivered >= 85 ? 'ink' : 'destructive';
 
   return (
     <div className="page">
@@ -172,9 +190,7 @@ export default function Dashboard() {
           me ? ` · ${me.email}` : ''
         }`}
         extra={
-          <Button icon={<ReloadOutlined />} onClick={() => load()} loading={loading}>
-            刷新
-          </Button>
+          <Button icon={<ReloadOutlined />} onClick={() => load()} loading={loading} />
         }
       />
 
@@ -190,64 +206,60 @@ export default function Dashboard() {
         </Section>
       )}
 
-      {/* 首行四张卡等高：卡片撑满栅格高度，附注贴底对齐 */}
-      <Row gutter={metrics.gridGutter} align="stretch">
-        <Col span={6}>
-          <Card style={{ height: '100%' }}>
-            <Metric
+      {/* 今日数据带：四段等宽，一条卡承载，不再拆成四张卡 */}
+      <Card styles={{ body: { padding: 0 } }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' }}>
+          <div style={{ padding: `${metrics.cardPadding}px`, paddingRight: metrics.cardPadding }}>
+            <Stat
               label="今日已发送"
               value={d.today.sent}
               suffix="封"
+              size="lg"
               hint={`打开 ${d.today.opened} · 点击 ${d.today.clicked}`}
             />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card style={{ height: '100%' }}>
-            <Metric
-              label="今日剩余配额"
-              value={d.quota.remaining}
-              suffix={`/ ${d.quota.totalLimit}`}
-              tone={quotaTone}
-              hint={`${d.quota.activeAccounts}/${d.quota.accounts} 个账号可用 · ${d.quota.activeChannels} 条通道`}
-            />
-            <div style={{ marginTop: metrics.snug }}>
-              <Bar pct={d.quota.usedPct} color={d.quota.remaining === 0 ? tokens.destructive : tokens.primary} />
-            </div>
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card style={{ height: '100%' }}>
-            <Metric
-              label="待发队列"
-              value={d.queue.pending}
-              suffix="封"
-              hint={`${d.totals.activeCampaigns} 个任务进行中${d.queue.overdue > 0 ? ` · ${d.queue.overdue} 封已到期` : ''}`}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card style={{ height: '100%' }}>
-            <Metric
-              label={`近 ${d.rates.windowDays} 天送达率`}
-              value={d.rates.delivered}
-              suffix="%"
-              tone={d.rates.delivered >= 95 ? 'success' : d.rates.delivered >= 85 ? 'ink' : 'destructive'}
-              hint={`退信 ${d.rates.bounced}% · 打开 ${d.rates.opened}%`}
-            />
-          </Card>
-        </Col>
-      </Row>
+          </div>
+          <BandCell
+            label="今日剩余配额"
+            value={quotaLeft}
+            suffix={`/ ${d.quota.totalLimit}`}
+            tone={quotaTone}
+            hint={`${d.quota.active} 个发件邮箱可用`}
+          />
+          <BandCell
+            label="待发队列"
+            value={d.queue.pending}
+            suffix="封"
+            tone={d.queue.overdue > 0 ? 'warning' : 'ink'}
+            hint={
+              d.queue.overdue > 0
+                ? `${d.queue.overdue} 封已到期未发出`
+                : `${d.totals.activeCampaigns} 个任务进行中`
+            }
+          />
+          <BandCell
+            label={`近 ${d.rates.windowDays} 天送达率`}
+            value={d.rates.delivered}
+            suffix="%"
+            tone={deliverTone}
+            hint={`退信 ${d.rates.bounced}% · 打开 ${d.rates.opened}%`}
+            last
+          />
+        </div>
+      </Card>
 
       <Row gutter={metrics.gridGutter} align="stretch">
-        <Col span={8}>
-          <Section title="账号配额" desc="按真实账号聚合，同一账号的通道共享额度" style={{ height: '100%' }}>
+        <Col span={14}>
+          <Section
+            title="发件邮箱"
+            desc="每个邮箱独立配置与计数；停用或异常的不参与发送"
+            style={{ height: '100%' }}
+          >
             <Card style={{ height: '100%' }} styles={{ body: { padding: 0 } }}>
               {d.accounts.length === 0 ? (
                 <Empty
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="还没有发件账号"
-                  style={{ padding: '56px 24px', margin: 0 }}
+                  description="还没有发件邮箱"
+                  style={{ padding: '48px 24px', margin: 0 }}
                 >
                   <Link to="/channels">
                     <Button type="primary" size="small">去添加</Button>
@@ -258,109 +270,205 @@ export default function Dashboard() {
                   <div
                     key={c.id}
                     style={{
-                      padding: `14px ${metrics.cardPadding}px`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: metrics.gridGutter,
+                      padding: `12px ${metrics.cardPadding}px`,
                       borderTop: i === 0 ? 'none' : `1px solid ${tokens.border}`,
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: metrics.tight }}>
-                      <span
-                        style={{
-                          fontSize: 13,
-                          color: tokens.ink,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {c.name}
-                        {c.channelCount > 1 && (
-                          <Tag bordered={false} color="gold" style={{ marginInlineStart: 6, fontSize: 10 }}>
-                            共享 {c.channelCount} 条
-                          </Tag>
-                        )}
-                      </span>
-                      <span style={{ fontSize: 12, color: tokens.muted, fontVariantNumeric: 'tabular-nums', flex: '0 0 auto' }}>
-                        {c.used}/{c.limit}
-                      </span>
-                    </div>
-                    <div style={{ marginTop: metrics.tight }}>
-                      <Bar
-                        pct={c.usedPct}
-                        color={
-                          c.status !== 'active'
-                            ? tokens.borderStrong
-                            : c.remaining === 0
+                    <span
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: 3,
+                        flex: '0 0 6px',
+                        background:
+                          c.status === 'active'
+                            ? tokens.success
+                            : c.status === 'error'
                               ? tokens.destructive
-                              : tokens.primary
-                        }
-                      />
-                    </div>
-                    {c.status !== 'active' && (
-                      <div style={{ fontSize: 11, color: tokens.destructive, marginTop: 4 }}>
-                        {c.status === 'error' ? '已自动停用' : '已暂停'}
-                        {c.lastError ? ` · ${c.lastError.slice(0, 40)}` : ''}
-                      </div>
-                    )}
+                              : tokens.borderStrong,
+                      }}
+                    />
+                    <span
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: 13,
+                        color: tokens.ink,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {c.fromEmail}
+                      {c.status !== 'active' && (
+                        <span style={{ fontSize: 11, color: tokens.muted, marginLeft: 8 }}>
+                          {c.status === 'error' ? '异常' : '已停用'}
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color: tokens.muted,
+                        fontVariantNumeric: 'tabular-nums',
+                        flex: '0 0 auto',
+                      }}
+                    >
+                      今日 {c.used} / {c.limit}
+                    </span>
+                    <span
+                      style={{
+                        width: 72,
+                        textAlign: 'right',
+                        fontSize: 12,
+                        fontVariantNumeric: 'tabular-nums',
+                        color: c.remaining === 0 ? tokens.destructive : tokens.ink,
+                        flex: '0 0 auto',
+                      }}
+                    >
+                      剩 {c.remaining}
+                    </span>
                   </div>
                 ))
+              )}
+              {d.accounts.length > 0 && (
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: `10px ${metrics.cardPadding}px`,
+                    borderTop: `1px solid ${tokens.border}`,
+                    fontSize: 12,
+                    color: tokens.muted,
+                  }}
+                >
+                  <span>
+                    共 {d.accounts.length} 个，{d.quota.active} 个可用
+                  </span>
+                  <Link to="/channels" style={{ fontSize: 12 }}>
+                    管理发件邮箱 →
+                  </Link>
+                </div>
               )}
             </Card>
           </Section>
         </Col>
 
-        <Col span={8}>
-          <Section title="联系人" desc="抑制名单不会再收到任何邮件" style={{ height: '100%' }}>
+        <Col span={10}>
+          <Section title="运行状况" desc="队列与联系人的当前状态" style={{ height: '100%' }}>
             <Card style={{ height: '100%' }}>
-              <Row gutter={metrics.gridGutter}>
-                <Col span={12}>
-                  <Metric label="总联系人" value={d.totals.contacts} hint={`今日新增 ${d.today.newContacts}`} />
-                </Col>
-                <Col span={12}>
-                  <Metric label="可投递" value={d.totals.reachable} tone="success" hint={`抑制 ${d.totals.suppressed}`} />
-                </Col>
-              </Row>
-              <div style={{ marginTop: metrics.gridGutter }}>
-                <Bar pct={(d.totals.reachable / Math.max(d.totals.contacts, 1)) * 100} color={tokens.success} />
-                <div style={{ fontSize: 12, color: tokens.muted, marginTop: metrics.tight, lineHeight: 1.6 }}>
-                  可投递占比 {Math.round((d.totals.reachable / Math.max(d.totals.contacts, 1)) * 1000) / 10}%
-                </div>
-              </div>
-            </Card>
-          </Section>
-        </Col>
-
-        <Col span={8}>
-          <Section title="近 30 天效果" desc={`统计基数 ${d.rates.settled} 封已出结果`} style={{ height: '100%' }}>
-            <Card style={{ height: '100%' }}>
+              <div style={{ fontSize: 12, color: tokens.muted, marginBottom: metrics.snug }}>队列</div>
               <Row gutter={metrics.gridGutter}>
                 <Col span={8}>
-                  <Metric label="打开率" value={d.rates.opened} suffix="%" />
+                  <Stat label="待发" value={d.queue.pending} />
                 </Col>
                 <Col span={8}>
-                  <Metric label="点击率" value={d.rates.clicked} suffix="%" />
-                </Col>
-                <Col span={8}>
-                  <Metric
-                    label="退信率"
-                    value={d.rates.bounced}
-                    suffix="%"
-                    tone={d.rates.bounced >= 5 ? 'destructive' : 'ink'}
+                  <Stat
+                    label="已到期"
+                    value={d.queue.overdue}
+                    tone={d.queue.overdue > 0 ? 'warning' : 'ink'}
                   />
                 </Col>
+                <Col span={8}>
+                  <Stat label="失败" value={d.queue.failed} tone={d.queue.failed > 0 ? 'destructive' : 'ink'} />
+                </Col>
               </Row>
-              <div style={{ marginTop: metrics.gridGutter, fontSize: 12, color: tokens.muted, lineHeight: 1.6 }}>
-                按已出结果的 {d.rates.windowDays} 天数据计算，排队中的不计入分母。
+
+              <div
+                style={{
+                  marginTop: metrics.gridGutter,
+                  paddingTop: metrics.gridGutter,
+                  borderTop: `1px solid ${tokens.border}`,
+                  fontSize: 12,
+                  color: tokens.muted,
+                  marginBottom: metrics.snug,
+                }}
+              >
+                联系人
               </div>
+              <Row gutter={metrics.gridGutter}>
+                <Col span={8}>
+                  <Stat label="总数" value={d.totals.contacts} />
+                </Col>
+                <Col span={8}>
+                  <Stat
+                    label="可投递"
+                    value={d.totals.reachable}
+                    tone="success"
+                    hint={`今日新增 ${d.today.newContacts}`}
+                  />
+                </Col>
+                <Col span={8}>
+                  <Stat label="抑制" value={d.totals.suppressed} hint="不再发送" />
+                </Col>
+              </Row>
+
+              <div
+                style={{
+                  marginTop: metrics.gridGutter,
+                  paddingTop: metrics.gridGutter,
+                  borderTop: `1px solid ${tokens.border}`,
+                  fontSize: 12,
+                  color: tokens.muted,
+                  marginBottom: metrics.snug,
+                }}
+              >
+                任务
+              </div>
+              <Row gutter={metrics.gridGutter}>
+                <Col span={8}>
+                  <Stat label="总数" value={d.totals.campaigns} />
+                </Col>
+                <Col span={8}>
+                  <Stat label="进行中" value={d.totals.activeCampaigns} />
+                </Col>
+                <Col span={8}>
+                  <Stat label="已完成" value={d.totals.doneCampaigns} />
+                </Col>
+              </Row>
             </Card>
           </Section>
         </Col>
       </Row>
 
-      <Section title="发送趋势（近 30 天）" desc="柱为每日发送量，折线为打开率">
-        <Card styles={{ body: { paddingTop: metrics.tight } }}>
-          <TrendChart data={trend} height={280} />
-        </Card>
-      </Section>
+      <Row gutter={metrics.gridGutter} align="stretch">
+        <Col span={9}>
+          <Section
+            title={`近 ${d.rates.windowDays} 天效果`}
+            desc={`按 ${d.rates.settled} 封已出结果的邮件计算，排队中的不计入分母`}
+            style={{ height: '100%' }}
+          >
+            <Card style={{ height: '100%' }}>
+              <Row gutter={[metrics.gridGutter, metrics.gridGutter]}>
+                <Col span={12}>
+                  <Stat label="送达率" value={d.rates.delivered} suffix="%" tone={deliverTone} />
+                </Col>
+                <Col span={12}>
+                  <Stat label="退信率" value={d.rates.bounced} suffix="%" tone={d.rates.bounced >= 5 ? 'destructive' : 'ink'} />
+                </Col>
+                <Col span={12}>
+                  <Stat label="打开率" value={d.rates.opened} suffix="%" />
+                </Col>
+                <Col span={12}>
+                  <Stat label="点击率" value={d.rates.clicked} suffix="%" />
+                </Col>
+              </Row>
+            </Card>
+          </Section>
+        </Col>
+
+        <Col span={15}>
+          <Section title="发送趋势（近 30 天）" desc="柱为每日发送量，折线为打开率" style={{ height: '100%' }}>
+            <Card style={{ height: '100%' }} styles={{ body: { paddingTop: metrics.tight } }}>
+              <TrendChart data={trend} height={230} />
+            </Card>
+          </Section>
+        </Col>
+      </Row>
     </div>
   );
 }

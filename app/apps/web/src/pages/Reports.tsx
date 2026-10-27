@@ -109,10 +109,7 @@ export default function Reports() {
       render: (_, r) => (
         <div>
           <div style={{ color: tokens.ink }}>{r.fromEmail}</div>
-          <div style={{ fontSize: 12, color: tokens.muted }}>
-            {r.username}
-            {r.channelCount > 1 ? ` · ${r.channelCount} 个发件邮箱` : ''}
-          </div>
+          <div style={{ fontSize: 12, color: tokens.muted }}>{r.host}</div>
         </div>
       ),
     },

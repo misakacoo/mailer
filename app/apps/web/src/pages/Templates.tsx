@@ -8,6 +8,7 @@ import {
   Form,
   Input,
   Modal,
+  Popconfirm,
   Segmented,
   Select,
   Space,
@@ -28,6 +29,7 @@ import {
   PlusOutlined,
   ReloadOutlined,
   SendOutlined,
+  UndoOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api, upload } from '../api';
@@ -399,27 +401,39 @@ export default function Templates() {
     },
     {
       title: '操作',
-      width: 240,
+      width: 140,
       render: (_: unknown, r: TemplateRow) => {
+        // 回收站里只给「恢复」和「彻底删除」两个动作
         if (r.deletedAt) {
           return (
-            <Space size={4} wrap>
-              <Button size="small" onClick={() => void restore(r)}>
-                恢复
-              </Button>
-              <Button size="small" danger onClick={() => purge(r)}>
-                彻底删除
-              </Button>
+            <Space size={2}>
+              <Tooltip title="恢复到模板列表">
+                <Button size="small" type="text" icon={<UndoOutlined />} onClick={() => void restore(r)} />
+              </Tooltip>
+              <Popconfirm title="彻底删除后无法恢复，确认？" okText="彻底删除" cancelText="取消" onConfirm={() => purge(r)}>
+                <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+              </Popconfirm>
             </Space>
           );
         }
+        // 与其他页面一致：表格里的动作一律无描边图标 + 悬浮说明
         return (
-          <Space size={4} wrap>
-            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>
-              编辑
-            </Button>
-            <Button size="small" icon={<CopyOutlined />} onClick={() => duplicate(r)} />
-            <Button size="small" danger icon={<DeleteOutlined />} onClick={() => remove(r)} />
+          <Space size={2}>
+            <Tooltip title="编辑">
+              <Button size="small" type="text" icon={<EditOutlined />} onClick={() => openEdit(r)} />
+            </Tooltip>
+            <Tooltip title="复制为新模板">
+              <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => duplicate(r)} />
+            </Tooltip>
+            <Popconfirm
+              title="确认删除该模板？"
+              description="会进入回收站，可随时恢复"
+              okText="删除"
+              cancelText="取消"
+              onConfirm={() => remove(r)}
+            >
+              <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+            </Popconfirm>
           </Space>
         );
       },
@@ -684,7 +698,7 @@ export default function Templates() {
         destroyOnClose
       >
         <Form form={testForm} layout="vertical" onFinish={doTestSend} requiredMark={false}>
-          <Form.Item name="channelId" label="使用通道" rules={[{ required: true, message: '请选择通道' }]}>
+          <Form.Item name="channelId" label="使用发件邮箱" rules={[{ required: true, message: '请选择发件邮箱' }]}>
             <Select
               options={channels.map((c) => ({
                 value: c.id,
@@ -704,7 +718,7 @@ export default function Templates() {
             <Input />
           </Form.Item>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            测试发送会消耗该通道 1 封配额；为了让链接可点，测试邮件不注入追踪。
+            测试发送会消耗该发件邮箱 1 封配额；为了让链接可点，测试邮件不注入追踪。
           </Typography.Text>
         </Form>
       </Modal>

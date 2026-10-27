@@ -1,6 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Campaign, Channel, Recipient, Template } from '@prisma/client';
-import { AccountPool, accountKey, groupAccounts } from '../common/accounts';
 import { APP_CONFIG, AppConfig } from '../common/config';
 import { PrismaService } from '../common/prisma.service';
 import { calendarDay } from '../common/quota';
@@ -8,6 +7,7 @@ import { MailService, OutgoingAttachment } from '../mail/mail.service';
 import { buildVars, htmlToText, renderHtml, renderSubject, renderTextBody } from '../templates/render';
 import { TrackingService } from '../tracking/tracking.service';
 import { log } from '../common/logger';
+import { isSameCalendarDay } from '../common/quota';
 
 /** 4xx 临时失败的重试间隔：1 分钟 / 5 分钟 / 30 分钟 */
 const RETRY_BACKOFF_SEC = [60, 300, 1800];
@@ -297,8 +297,8 @@ export class SenderService {
    * 选通道：状态正常、账号池今日还有配额。
    *
    * 同一 SMTP 账号可能有多条通道（不同发信身份），它们共用一本账：
-   * 配额按账号池判断，不能各算各的。发送节奏由任务的间隔设置决定，
-   * 这里不再有通道/账号级的间隔约束——两处约束只会让人配置时互相打架。
+   * 每条记录就是一个发件邮箱，配额按它自己的已发数判断。
+   * 发送节奏由任务的间隔设置决定，这里没有发件邮箱级的间隔约束。
    * 同优先级下优先用今天发得少的账号，把额度摊平。
    */
   private async selectChannel(
@@ -306,8 +306,7 @@ export class SenderService {
     day: string,
   ): Promise<{ channel: Channel | null; readyInMs: number }> {
     const all = await this.prisma.channel.findMany();
-    const pools = groupAccounts(all, day);
-    // 选择顺序：分组 > 指定通道 > 全部。
+    // 选择顺序：分组 > 指定记录 > 全部。
     // 分组是业务上的选择单位（一个账号下常有多条不同发信身份的通道），
     // 老任务没有分组，继续按 channelIds 走，不会因为这次改动失效。
     const scoped =
@@ -317,13 +316,13 @@ export class SenderService {
           ? all.filter((c) => campaign.channelIds.includes(c.id))
           : all;
 
-    const usable: { c: Channel; pool: AccountPool<Channel>; used: number }[] = [];
+    const usable: { c: Channel; used: number }[] = [];
 
     for (const c of scoped) {
       if (c.status !== 'active') continue;
-      const pool = pools.get(accountKey(c.host, c.username));
-      if (!pool || pool.remaining <= 0) continue;
-      usable.push({ c, pool, used: pool.used });
+      const used = isSameCalendarDay(c.quotaDate, day) ? Math.max(0, c.sentToday) : 0;
+      if (c.dailyLimit > 0 && used >= c.dailyLimit) continue;
+      usable.push({ c, used });
     }
 
     if (usable.length === 0) {

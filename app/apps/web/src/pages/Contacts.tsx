@@ -297,7 +297,7 @@ export default function Contacts() {
           </Tooltip>
           <Popconfirm
             title="确认删除该联系人？"
-            description="有投递历史的联系人无法删除；只是不想再发给他，可以把他移出所有分组"
+            description="会同时删掉这个人的投递记录，且无法恢复"
             okText="删除"
             cancelText="取消"
             onConfirm={() => removeContact(r)}

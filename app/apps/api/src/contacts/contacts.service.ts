@@ -131,12 +131,8 @@ export class ContactsService {
    */
   async remove(id: number) {
     await this.getOrThrow(id);
-    const history = await this.prisma.recipient.count({ where: { contactId: id } });
-    if (history > 0) {
-      throw new BadRequestException(
-        `该联系人有 ${history} 条投递记录，删除会一并清空历史。如果只是不想再发给他，可以把他移出所有分组。`,
-      );
-    }
+    // 联系人可以随时删除：投递记录随外键级联清空（schema 里 onDelete: Cascade）。
+    // 历史统计会因此少掉这个人，这是删除本身应有的代价，不需要阻止。
     await this.prisma.contact.delete({ where: { id } });
     return { ok: true };
   }

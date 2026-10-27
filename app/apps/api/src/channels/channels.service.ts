@@ -1,6 +1,5 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Channel, Prisma } from '@prisma/client';
-import { AccountPool, accountKey, groupAccounts } from '../common/accounts';
 import { APP_CONFIG, AppConfig } from '../common/config';
 import { encryptSecret } from '../common/crypto';
 import { PrismaService } from '../common/prisma.service';
@@ -35,13 +34,6 @@ export interface PublicChannel {
   lastOkAt: string | null;
   lastSentAt: string | null;
   hasPassword: boolean;
-  /** 账号身份（host + username），同一账号下的通道共享配额与发送间隔 */
-  accountKey: string;
-  accountChannelCount: number;
-  sharedQuota: boolean;
-  accountLimit: number;
-  accountUsed: number;
-  accountRemaining: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -63,174 +55,77 @@ export class ChannelsService {
     const rows = await this.prisma.channel.findMany({
       orderBy: [{ priority: 'desc' }, { id: 'asc' }],
     });
-    const pools = groupAccounts(rows, day);
-    return rows.map((c) => this.toPublic(c, day, pools.get(accountKey(c.host, c.username))));
+    return rows.map((c) => this.toPublic(c, day));
   }
 
   async create(dto: CreateChannelDto): Promise<PublicChannel> {
     const day = calendarDay();
-    const host = dto.host.trim();
-    const username = dto.username.trim();
-    const siblings = await this.findAccountChannels(host, username);
-
-    // 同一个 SMTP 账号只认一本账：新增发信身份时沿用账号已有上限，
-    // 避免用「新增一条通道」把账号额度悄悄放大。
-    const accountLimit = siblings.length
-      ? Math.min(...siblings.map((c) => c.dailyLimit))
-      : dto.dailyLimit ?? this.cfg.defaultDailyLimit;
-
-    const passwordEnc = encryptSecret(dto.password, this.cfg.credKey);
-    const created = await this.prisma.$transaction(async (tx) => {
-      const row = await tx.channel.create({
-        data: {
-          host,
-          port: dto.port,
-          secure: dto.secure,
-          username,
-          passwordEnc,
-          fromName: dto.fromName?.trim() || null,
-          fromEmail: dto.fromEmail.trim().toLowerCase(),
-          replyTo: dto.replyTo?.trim().toLowerCase() || null,
-          dailyLimit: accountLimit,
-          priority: dto.priority ?? 0,
-          groupIds: dto.groupIds ?? [],
-          quotaDate: dayToDbDate(day),
-        },
-      });
-
-      // 同一账号只保留一套 SMTP 连接配置：新增发信身份时把服务器/端口/密码
-      // 同步给已有通道，避免同账号下出现新旧两套凭据。
-      // 每条通道单独加密（各自新 IV），不要复用同一段密文。
-      for (const sibling of siblings) {
-        await tx.channel.update({
-          where: { id: sibling.id },
-          data: {
-            host,
-            port: dto.port,
-            secure: dto.secure,
-            username,
-            passwordEnc: encryptSecret(dto.password, this.cfg.credKey),
-            dailyLimit: accountLimit,
-          },
-        });
-      }
-
-      return row;
+    const created = await this.prisma.channel.create({
+      data: {
+        host: dto.host.trim(),
+        port: dto.port,
+        secure: dto.secure,
+        username: dto.username.trim(),
+        passwordEnc: encryptSecret(dto.password, this.cfg.credKey),
+        fromName: dto.fromName?.trim() || null,
+        fromEmail: dto.fromEmail.trim().toLowerCase(),
+        replyTo: dto.replyTo?.trim().toLowerCase() || null,
+        dailyLimit: dto.dailyLimit ?? this.cfg.defaultDailyLimit,
+        priority: dto.priority ?? 0,
+        groupIds: dto.groupIds ?? [],
+        quotaDate: dayToDbDate(day),
+      },
     });
-
-    return this.toPublic(created, day, await this.poolFor(created, day));
+    return this.toPublic(created, day);
   }
 
   async update(id: number, dto: UpdateChannelDto): Promise<PublicChannel> {
     const day = calendarDay();
-    const existing = await this.getOrThrow(id);
-    const siblings = await this.findAccountChannels(existing.host, existing.username);
-    const siblingIds = siblings.map((c) => c.id);
+    await this.getOrThrow(id);
 
-    // SMTP 连接信息与配额设置属于账号，不属于单条通道：
-    // 改一处就同步到同账号下所有通道，否则会出现"这条能发、那条密码是旧的"。
-    const accountData: Prisma.ChannelUpdateManyMutationInput = {};
-    if (dto.host !== undefined) accountData.host = dto.host.trim();
-    if (dto.port !== undefined) accountData.port = dto.port;
-    if (dto.secure !== undefined) accountData.secure = dto.secure;
-    if (dto.username !== undefined) accountData.username = dto.username.trim();
-    if (dto.dailyLimit !== undefined) accountData.dailyLimit = dto.dailyLimit;
+    // 一条记录就是一个发件邮箱：改哪条只影响哪条，不再向"同账号其他记录"同步。
+    const data: Prisma.ChannelUncheckedUpdateInput = {};
+    if (dto.host !== undefined) data.host = dto.host.trim();
+    if (dto.port !== undefined) data.port = dto.port;
+    if (dto.secure !== undefined) data.secure = dto.secure;
+    if (dto.username !== undefined) data.username = dto.username.trim();
+    if (dto.dailyLimit !== undefined) data.dailyLimit = dto.dailyLimit;
+    if (dto.fromName !== undefined) data.fromName = dto.fromName?.trim() || null;
+    if (dto.fromEmail !== undefined) data.fromEmail = dto.fromEmail.trim().toLowerCase();
+    if (dto.replyTo !== undefined) data.replyTo = dto.replyTo?.trim().toLowerCase() || null;
+    if (dto.priority !== undefined) data.priority = dto.priority;
+    if (dto.groupIds !== undefined) data.groupIds = dto.groupIds;
+    if (dto.status !== undefined && ['active', 'paused', 'error'].includes(dto.status)) {
+      data.status = dto.status;
+    }
 
-    // 密码留空表示不修改：前端编辑时不会拿到明文，也就无法原样回传。
-    // 密码本身在事务里逐条重新加密，避免同账号多条通道的密文完全相同。
+    // 密码留空表示不修改：前端编辑时拿不到明文，也就无法原样回传
     const newPassword = dto.password !== undefined && dto.password !== '' ? dto.password : null;
     if (newPassword) {
-      accountData.consecutiveFailures = 0;
-      accountData.lastError = null;
+      data.passwordEnc = encryptSecret(newPassword, this.cfg.credKey);
+      data.consecutiveFailures = 0;
+      data.lastError = null;
+      if (dto.status === undefined) data.status = 'active';
     }
 
-    // 只影响当前发信身份的字段
-    // 用 Unchecked 变体才能直接写 groupId 这个外键标量（带关系时 UpdateInput 会隐藏它）
-    const channelData: Prisma.ChannelUncheckedUpdateInput = {};
-    if (dto.fromName !== undefined) channelData.fromName = dto.fromName?.trim() || null;
-    if (dto.fromEmail !== undefined) channelData.fromEmail = dto.fromEmail.trim().toLowerCase();
-    if (dto.replyTo !== undefined) channelData.replyTo = dto.replyTo?.trim().toLowerCase() || null;
-    if (dto.priority !== undefined) channelData.priority = dto.priority;
-    // 分组只影响当前发信身份，不跟着账号走
-    if (dto.groupIds !== undefined) channelData.groupIds = dto.groupIds;
-    if (dto.status !== undefined && ['active', 'paused', 'error'].includes(dto.status)) {
-      channelData.status = dto.status;
-    }
-    // 改密码后默认把当前通道恢复为可用；不顺手启用同账号下被手工停用的其他通道
-    if (dto.password !== undefined && dto.password !== '' && dto.status === undefined) {
-      channelData.status = 'active';
-    }
-
-    if (Object.keys(accountData).length > 0 || Object.keys(channelData).length > 0) {
-      await this.prisma.$transaction(async (tx) => {
-        if (Object.keys(accountData).length > 0) {
-          await tx.channel.updateMany({ where: { id: { in: siblingIds } }, data: accountData });
-        }
-        if (newPassword) {
-          for (const siblingId of siblingIds) {
-            await tx.channel.update({
-              where: { id: siblingId },
-              data: { passwordEnc: encryptSecret(newPassword, this.cfg.credKey) },
-            });
-          }
-        }
-        if (Object.keys(channelData).length > 0) {
-          await tx.channel.update({ where: { id }, data: channelData });
-        }
-      });
+    if (Object.keys(data).length > 0) {
+      await this.prisma.channel.update({ where: { id }, data });
     }
 
     const updated = await this.getOrThrow(id);
-    return this.toPublic(updated, day, await this.poolFor(updated, day));
+    return this.toPublic(updated, day);
   }
 
   async remove(id: number): Promise<{ ok: true }> {
-    const channel = await this.getOrThrow(id);
-    const day = calendarDay();
-    const siblings = await this.findAccountChannels(channel.host, channel.username);
-    const other = siblings.filter((c) => c.id !== id).sort((a, b) => a.id - b.id)[0];
-
-    try {
-      await this.prisma.$transaction(async (tx) => {
-        // 删除一条同账号通道时，把它今天已用的额度转给同账号的另一条，
-        // 否则账号池的已用数会凭空减少，等于凭空多出配额。
-        if (other) {
-          const used = isSameCalendarDay(channel.quotaDate, day) ? Math.max(0, channel.sentToday) : 0;
-          const otherUsed = isSameCalendarDay(other.quotaDate, day) ? Math.max(0, other.sentToday) : 0;
-          const lastSentAt =
-            channel.lastSentAt && (!other.lastSentAt || channel.lastSentAt > other.lastSentAt)
-              ? channel.lastSentAt
-              : undefined;
-          if (used > 0 || lastSentAt) {
-            await tx.channel.update({
-              where: { id: other.id },
-              data: {
-                ...(used > 0 ? { sentToday: otherUsed + used, quotaDate: dayToDbDate(day) } : {}),
-                ...(lastSentAt ? { lastSentAt } : {}),
-              },
-            });
-          }
-        }
-        await tx.channel.delete({ where: { id } });
-      });
-      return { ok: true };
-    } catch (e: any) {
-      if (e?.code === 'P2003') {
-        throw new BadRequestException('该通道已被历史发送记录引用，不能删除。可以先停用。');
-      }
-      if (e?.code === 'P2025') throw new NotFoundException('通道不存在');
-      throw e;
-    }
+    await this.getOrThrow(id);
+    // 投递记录里的发件邮箱是外键（onDelete: SetNull），历史保留、指向置空
+    await this.prisma.channel.delete({ where: { id } });
+    return { ok: true };
   }
 
-  /**
-   * 复制一条通道：同一个 SMTP 账号可以建多条记录，用于区分不同发信身份。
-   * 服务商的日发限额按账号算，复制不会提升真实配额——配额与间隔由账号池共享。
-   */
   async duplicate(id: number): Promise<PublicChannel> {
     const day = calendarDay();
     const src = await this.getOrThrow(id);
-    const pool = await this.poolFor(src, day);
     // 不能直接复用原密文：相同明文应使用新的 IV 重新加密，
     // 否则两条记录的 password_enc 完全一致，能从密文看出它们用了同一个密码。
     const plainPassword = this.credentialFromChannel(src).password;
@@ -244,15 +139,15 @@ export class ChannelsService {
         fromName: src.fromName,
         fromEmail: src.fromEmail,
         replyTo: src.replyTo,
-        dailyLimit: pool?.limit ?? src.dailyLimit,
+        dailyLimit: src.dailyLimit,
         priority: src.priority,
         status: 'active',
-        // 账号已发数由所有通道汇总，新通道必须从 0 开始，否则会重复计数
+        // 新记录从 0 开始计数，不继承已用额度
         sentToday: 0,
         quotaDate: dayToDbDate(day),
       },
     });
-    return this.toPublic(created, day, await this.poolFor(created, day));
+    return this.toPublic(created, day);
   }
 
   /** 测试连接：返回诊断结果而不是抛错，前端直接展示原因 */
@@ -304,10 +199,10 @@ export class ChannelsService {
   async testSend(id: number, to: string) {
     const channel = await this.getOrThrow(id);
     const day = calendarDay();
-    const pool = await this.poolFor(channel, day);
-    if (pool && pool.limit > 0 && pool.remaining <= 0) {
+    const used = isSameCalendarDay(channel.quotaDate, day) ? Math.max(0, channel.sentToday) : 0;
+    if (channel.dailyLimit > 0 && used >= channel.dailyLimit) {
       throw new BadRequestException(
-        `该账号今日配额已用完（${pool.used}/${pool.limit}），测试信也会消耗服务商真实额度，请明天再试`,
+        `该发件邮箱今日配额已用完（${used}/${channel.dailyLimit}），测试信也会消耗服务商真实额度，请明天再试`,
       );
     }
     const cred = this.credentialFromChannel(channel);
@@ -395,50 +290,6 @@ export class ChannelsService {
   }
 
   /** 找出同一 SMTP 账号下的所有通道。通道数量很少，直接内存过滤，避免大小写/空格差异漏匹配。 */
-  private async findAccountChannels(host: string, username: string): Promise<Channel[]> {
-    const key = accountKey(host, username);
-    const all = await this.prisma.channel.findMany();
-    return all.filter((c) => accountKey(c.host, c.username) === key);
-  }
-
-  private async poolFor(channel: Channel, day: string): Promise<AccountPool<Channel> | undefined> {
-    const all = await this.prisma.channel.findMany();
-    return groupAccounts(all, day).get(accountKey(channel.host, channel.username));
-  }
-
-  private credentialFromChannel(c: Channel): SmtpCredential {
-    try {
-      return credentialFromChannelUtil(c, this.cfg.credKey);
-    } catch {
-      throw new BadRequestException('无法解密该通道的密码，可能是 CRED_KEY 被更换过，请重新录入密码');
-    }
-  }
-
-  private async resolveCredential(dto: TestConnectionDto): Promise<SmtpCredential> {
-    if (dto.id) {
-      const channel = await this.getOrThrow(dto.id);
-      const stored = this.credentialFromChannel(channel);
-      return {
-        host: dto.host?.trim() || stored.host,
-        port: dto.port ?? stored.port,
-        secure: dto.secure ?? stored.secure,
-        username: dto.username?.trim() || stored.username,
-        password: dto.password || stored.password,
-      };
-    }
-
-    if (!dto.host || !dto.port || !dto.username || !dto.password) {
-      throw new BadRequestException('测试未保存的配置时，必须提供 host / port / username / password');
-    }
-    return {
-      host: dto.host.trim(),
-      port: dto.port,
-      secure: dto.secure ?? true,
-      username: dto.username.trim(),
-      password: dto.password,
-    };
-  }
-
   /** 跨天时把计数清零，避免昨天用掉的额度压住今天的发送 */
   private async resetQuotas(day: string) {
     const today = dayToDbDate(day);
@@ -522,11 +373,41 @@ export class ChannelsService {
     return { ok: true, affected };
   }
 
-  private toPublic(c: Channel, day: string, pool?: AccountPool<Channel>): PublicChannel {
+  private credentialFromChannel(c: Channel): SmtpCredential {
+    try {
+      return credentialFromChannelUtil(c, this.cfg.credKey);
+    } catch {
+      throw new BadRequestException('无法解密该发件邮箱的密码，可能是 CRED_KEY 被更换过，请重新录入密码');
+    }
+  }
+
+  private async resolveCredential(dto: TestConnectionDto): Promise<SmtpCredential> {
+    if (dto.id) {
+      const channel = await this.getOrThrow(dto.id);
+      const stored = this.credentialFromChannel(channel);
+      return {
+        host: dto.host?.trim() || stored.host,
+        port: dto.port ?? stored.port,
+        secure: dto.secure ?? stored.secure,
+        username: dto.username?.trim() || stored.username,
+        password: dto.password || stored.password,
+      };
+    }
+
+    if (!dto.host || !dto.port || !dto.username || !dto.password) {
+      throw new BadRequestException('测试未保存的配置时，必须提供 host / port / username / password');
+    }
+    return {
+      host: dto.host.trim(),
+      port: dto.port,
+      secure: dto.secure ?? true,
+      username: dto.username.trim(),
+      password: dto.password,
+    };
+  }
+
+  private toPublic(c: Channel, day: string): PublicChannel {
     const ownUsed = isSameCalendarDay(c.quotaDate, day) ? c.sentToday : 0;
-    const accountLimit = pool?.limit ?? c.dailyLimit;
-    const accountUsed = pool?.used ?? ownUsed;
-    const accountRemaining = pool?.remaining ?? Math.max(0, accountLimit - accountUsed);
     return {
       id: c.id,
       host: c.host,
@@ -536,11 +417,9 @@ export class ChannelsService {
       fromName: c.fromName,
       fromEmail: c.fromEmail,
       replyTo: c.replyTo,
-      // 对外的 dailyLimit / sentToday / remaining 一律是账号口径，
-      // 这样前端不会再把 3 条同账号通道显示成 3 倍额度。
-      dailyLimit: accountLimit,
-      sentToday: accountUsed,
-      remaining: accountRemaining,
+      dailyLimit: c.dailyLimit,
+      sentToday: ownUsed,
+      remaining: Math.max(0, c.dailyLimit - ownUsed),
       priority: c.priority,
       status: c.status,
       consecutiveFailures: c.consecutiveFailures,
@@ -550,12 +429,6 @@ export class ChannelsService {
       lastSentAt: c.lastSentAt?.toISOString() ?? null,
       groupIds: c.groupIds ?? [],
       hasPassword: Boolean(c.passwordEnc),
-      accountKey: pool?.key ?? accountKey(c.host, c.username),
-      accountChannelCount: pool?.channelCount ?? 1,
-      sharedQuota: (pool?.channelCount ?? 1) > 1,
-      accountLimit,
-      accountUsed,
-      accountRemaining,
       createdAt: c.createdAt.toISOString(),
       updatedAt: c.updatedAt.toISOString(),
     };
