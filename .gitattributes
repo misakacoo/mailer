@@ -1,0 +1,4 @@
+# 行尾统一为 LF。
+# 这个仓库里同时有 Windows 开发机和 Linux 服务器：脚本一旦被转成 CRLF，
+# 在 Debian 上会以 "bad interpreter: /bin/bash^M" 失败，而且报错信息很容易被误读成缺依赖。
+* text=auto eol=lf

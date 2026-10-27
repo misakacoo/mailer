@@ -1,0 +1,19 @@
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# 真实凭据绝不入库
+.env
+.env.*
+*.env
+!*.env.example
+
+# 本地工具状态（工作记忆、会话数据，不入库）
+.workbuddy/
+
+# 系统与编辑器噪音
+.DS_Store
+Thumbs.db
+*.log

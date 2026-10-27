@@ -1,0 +1,33 @@
+[Unit]
+Description=Mailer Worker (SMTP 发送队列消费者)
+Documentation=file:///opt/mailer/DEPLOY.md
+After=network-online.target postgresql.service mailer-api.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=mailer
+Group=mailer
+WorkingDirectory=/opt/mailer
+EnvironmentFile=/etc/mailer/mailer.env
+ExecStart=/usr/local/bin/node /opt/mailer/apps/api/dist/worker.js
+Restart=always
+RestartSec=5
+# 留给正在发送中的那封邮件完成 SMTP 会话
+TimeoutStopSec=60
+KillSignal=SIGTERM
+SyslogIdentifier=mailer-worker
+StandardOutput=journal
+StandardError=journal
+
+MemoryMax=512M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/mailer/shared
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,333 @@
+/// 管理员账号（单行表，id 恒为 1）。
+/// 存在时以库为准，环境变量只在首次初始化时写入一次——这样系统里能改账号密码，
+/// 又不会因为重启把改过的密码覆盖回去。
+model AdminAccount {
+  id                 Int      @id @default(1)
+  email              String
+  passwordHash       String   @map("password_hash")
+  /// 仍在用初始默认密码时为 true，面板顶部据此提示尽快修改
+  mustChangePassword Boolean  @default(false) @map("must_change_password")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("admin_account")
+}
+
+// 邮件营销系统 · 数据模型
+// 设计要点：
+// 1. recipients 表既是投递明细也是发送队列，状态只有一份真相
+// 2. (campaign_id, contact_id) 唯一索引保证同一任务不会重复发给同一个人
+// 3. 联系人邮箱全局唯一并统一小写，避免大小写导致的重复
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// 发信通道（一条记录 = 一个发信身份；同一 SMTP 账号 host + username 下的多条记录共享配额与发送间隔）
+/// 发件账号分组：任务按分组选号，而不是逐条挑通道
+model ChannelGroup {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  note      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("channel_groups")
+}
+
+model Channel {
+  id                  Int       @id @default(autoincrement())
+  name                String
+  host                String
+  port                Int       @default(465)
+  secure              Boolean   @default(true) // true=SSL(465) false=STARTTLS(587)
+  username            String
+  passwordEnc         String    @map("password_enc") // AES-256-GCM，密钥来自 CRED_KEY
+  fromName            String?   @map("from_name")
+  fromEmail           String    @map("from_email")
+  replyTo             String?   @map("reply_to")
+
+  dailyLimit          Int       @default(50) @map("daily_limit") // 账号级设置：同 host+username 共享
+  sentToday           Int       @default(0) @map("sent_today") // 本通道计数；账号已用 = 同账号所有通道之和
+  quotaDate           DateTime? @map("quota_date") @db.Date
+  minIntervalSec      Int       @default(30) @map("min_interval_sec") // 账号级设置：同 host+username 共享
+  priority            Int       @default(0) // 数值越大越优先被调度
+
+  status              String    @default("active") // active | paused | error
+  /// 所属发件分组（可多选）；空数组表示未分组
+  groupIds            Int[]     @default([]) @map("group_ids")
+  consecutiveFailures Int       @default(0) @map("consecutive_failures")
+  lastError           String?   @map("last_error")
+  lastErrorAt         DateTime? @map("last_error_at")
+  lastOkAt            DateTime? @map("last_ok_at")
+  lastSentAt          DateTime? @map("last_sent_at")
+
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  recipients          Recipient[]
+
+  @@index([status])
+  @@map("channels")
+}
+
+/// 联系人（邮箱全局唯一）
+model Contact {
+  id         Int      @id @default(autoincrement())
+  email      String   @unique
+  name       String?
+  fields     Json     @default("{}") // 自定义字段，导入时动态产生
+  source     String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  listMembers ListMember[]
+  recipients  Recipient[]
+  events      Event[]
+
+  @@index([createdAt])
+  @@map("contacts")
+}
+
+/// 分组
+model List {
+  id          Int          @id @default(autoincrement())
+  name        String
+  description String?
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  members     ListMember[]
+
+  @@map("lists")
+}
+
+model ListMember {
+  listId    Int      @map("list_id")
+  contactId Int      @map("contact_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  list    List    @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([listId, contactId])
+  @@index([contactId])
+  @@map("list_members")
+}
+
+/// 邮件模板
+model Template {
+  id         Int      @id @default(autoincrement())
+  name       String
+  subject    String
+  html       String   @db.Text
+  text       String?  @db.Text // 纯文本版，为空时由 html 自动生成
+  trackOpen  Boolean  @default(true) @map("track_open")
+  trackClick Boolean  @default(true) @map("track_click")
+  attachmentIds Int[]  @default([]) @map("attachment_ids")
+  /// 软删除：非空即已进回收站
+  deletedAt  DateTime? @map("deleted_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  campaigns  Campaign[]
+
+  @@index([deletedAt])
+  @@map("templates")
+}
+
+/// 群发任务
+model Campaign {
+  id              Int       @id @default(autoincrement())
+  name            String
+  templateId      Int       @map("template_id")
+  listIds         Int[]     @map("list_ids")
+  channelIds      Int[]     @map("channel_ids")
+  /// 按分组选号：非空时优先按分组解析可用通道
+  channelGroupIds Int[]     @default([]) @map("channel_group_ids")
+  /// draft 草稿 | scheduled 已排期等时机 | running 发送中 | paused 已暂停 | done 完成 | canceled 已取消
+  status          String    @default("draft")
+  /// 最小发送间隔；与 sendIntervalMaxSec 一起构成随机区间
+  sendIntervalSec    Int       @default(30) @map("send_interval_sec")
+  /// 最大发送间隔：为空表示固定间隔（= 最小值）
+  sendIntervalMaxSec Int?      @map("send_interval_max_sec")
+  scheduledAt     DateTime? @map("scheduled_at")
+  /// 周期：daily | weekly | monthly。空 = 一次性任务。
+  /// 本轮跑完后由 worker 复制出下一轮，而不是原地重置——每轮的投递记录要分开存。
+  recurrence         String?
+  recurrenceInterval Int       @default(1) @map("recurrence_interval")
+  /// 周期截止时间：下一轮的计划时间超过它就不再生成
+  recurrenceUntil    DateTime? @map("recurrence_until")
+  /// 同一周期序列的编号（指向首轮的 id）
+  seriesId           Int?      @map("series_id")
+  /// 软删除：非空即已进回收站，所有常规查询必须排除
+  deletedAt          DateTime? @map("deleted_at")
+  startedAt       DateTime? @map("started_at")
+  finishedAt      DateTime? @map("finished_at")
+  totalCount      Int       @default(0) @map("total_count")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  template   Template          @relation(fields: [templateId], references: [id])
+  recipients Recipient[]
+  variants   CampaignVariant[]
+
+  @@index([status])
+  @@index([status, scheduledAt])
+  @@index([seriesId])
+  @@index([deletedAt])
+  @@map("campaigns")
+}
+
+/// A/B 变体：同一个任务里可以有几套主题/模板，按权重分给收件人
+model CampaignVariant {
+  id         Int      @id @default(autoincrement())
+  campaignId Int      @map("campaign_id")
+  /// 展示用的短标签 A / B / C
+  label      String
+  /// 覆盖任务默认主题；为空则用模板自身主题
+  subject    String?
+  /// 覆盖任务默认模板；为空则用任务模板
+  templateId Int?     @map("template_id")
+  /// 分流权重，按同组内归一化处理，不必凑成 100
+  weight     Int      @default(50)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, label])
+  @@map("campaign_variants")
+}
+
+/// 投递明细：一封邮件一行，同时充当发送队列
+model Recipient {
+  id            Int       @id @default(autoincrement())
+  campaignId    Int       @map("campaign_id")
+  contactId     Int       @map("contact_id")
+  email         String // 发送时的快照，联系人被删也不影响历史
+  channelId     Int?      @map("channel_id")
+  status        String    @default("queued") // queued | sending | sent | failed | suppressed
+  /// A/B 变体标签（A/B/C）；未启用 A/B 的任务为空。发信时据此覆盖主题与模板。
+  variant       String?
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now()) @map("next_attempt_at")
+  messageId     String?   @map("message_id")
+  errorCode     String?   @map("error_code")
+  errorMessage  String?   @map("error_message")
+  sentAt        DateTime? @map("sent_at")
+  openedAt      DateTime? @map("opened_at")
+  clickedAt     DateTime? @map("clicked_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact  Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  channel  Channel? @relation(fields: [channelId], references: [id])
+
+  @@unique([campaignId, contactId])
+  @@index([status, nextAttemptAt])
+  @@index([campaignId, status])
+  @@index([campaignId, variant])
+  @@map("recipients")
+}
+
+/// 行为事件：打开、点击、退信、退订
+model Event {
+  id          Int      @id @default(autoincrement())
+  campaignId  Int      @map("campaign_id")
+  recipientId Int      @map("recipient_id")
+  contactId   Int      @map("contact_id")
+  type        String // open | click | bounce | complaint
+  url         String?
+  ip          String?
+  userAgent   String?  @map("user_agent")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, type])
+  @@index([contactId, type])
+  @@map("events")
+}
+
+/// 抑制名单：退信、投诉、退订、手工拉黑的地址永不再发
+model Suppression {
+  email     String   @id
+  reason    String   @default("manual") // bounce | complaint | unsub | manual
+  note      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([reason])
+  @@map("suppressions")
+}
+
+/// 附件
+model Attachment {
+  id        Int      @id @default(autoincrement())
+  filename  String
+  mime      String
+  size      Int
+  path      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("attachments")
+}
+
+/// 系统运行状态：worker 心跳、上次备份时间等
+/// 不复用 audit_logs，因为心跳每 30 秒一条会把真正的审计记录淹没。
+model SystemState {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_state")
+}
+
+/// 操作审计
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  action    String
+  target    String?
+  detail    Json?
+  ip        String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+/// 导入任务：大文件导入改为后台分批处理。
+/// processed_rows 是断点：暂停/继续/取消都发生在这个游标上，
+/// 每个分块和游标放进同一个事务，崩溃重跑不会重复计数也不会跳行。
+model ImportJob {
+  id              Int      @id @default(autoincrement())
+  /// 上传暂存文件的令牌，对应 tmp 目录里的 import-<token>.bin / .json
+  token           String   @unique
+  filename        String
+  ext             String
+  size            Int
+  listId          Int      @map("list_id")
+  mapping         Json
+  totalRows       Int      @default(0) @map("total_rows")
+  /// 游标：已处理完的行数（不含表头）。恢复时从这里继续
+  processedRows   Int      @default(0) @map("processed_rows")
+  imported        Int      @default(0)
+  existing        Int      @default(0)
+  addedToList     Int      @default(0) @map("added_to_list")
+  invalid         Int      @default(0)
+  duplicateInFile Int      @default(0) @map("duplicate_in_file")
+  suppressed      Int      @default(0)
+  empty           Int      @default(0)
+  samples         Json?
+  /// pending 待处理 | running 进行中 | paused 已暂停 | done 完成 | canceled 已取消 | failed 失败
+  status          String   @default("pending")
+  error           String?
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@map("import_jobs")
+}

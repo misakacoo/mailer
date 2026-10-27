@@ -1,0 +1,203 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  background: #fafaf9;
+  color: #41413b;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 铁律 03：标题行高恒 1.3 */
+h1,
+h2,
+h3,
+h4,
+h5 {
+  color: #1a1a18;
+  line-height: 1.3;
+}
+
+/* 铁律 02：焦点环走 outline，不用 box-shadow ring */
+:focus-visible {
+  outline: 2px solid #a96510;
+  outline-offset: 2px;
+}
+
+/* 铁律 01：零阴影。AntD 默认给浮层加阴影，统一抹掉，改用描边分层 */
+.ant-modal-content,
+.ant-drawer-content,
+.ant-dropdown,
+.ant-select-dropdown,
+.ant-picker-dropdown,
+.ant-popover-inner,
+.ant-message-notice-content,
+.ant-notification-notice,
+.ant-tooltip-inner,
+.ant-table-wrapper .ant-table {
+  box-shadow: none !important;
+}
+
+.ant-modal-content,
+.ant-drawer-content,
+.ant-dropdown,
+.ant-select-dropdown,
+.ant-popover-inner {
+  border: 1px solid #e6e6e3;
+}
+
+/* 输入类控件的聚焦态同样不能走阴影 */
+.ant-input:focus,
+.ant-input-focused,
+.ant-input-affix-wrapper-focused,
+.ant-input-number-focused,
+.ant-select-focused .ant-select-selector,
+.ant-picker-focused {
+  box-shadow: none !important;
+}
+
+.ant-btn-primary {
+  box-shadow: none !important;
+}
+
+.center-screen {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    'Liberation Mono', monospace;
+  font-size: 12px;
+}
+
+.hairline-top {
+  border-top: 1px solid #e6e6e3;
+}
+
+.muted {
+  color: #74746c;
+}
+
+.ink {
+  color: #1a1a18;
+}
+
+/* ==========================================================================
+   页面容器
+   宽屏下居中并留出固定呼吸区；窄屏退化为等宽留白，不贴边。
+   ========================================================================== */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  width: 100%;
+}
+
+.page > * {
+  min-width: 0;
+}
+
+/* ==========================================================================
+   表格卡片
+   规则：卡片本身不留内边距，由单元格自带 24px 留白承载内容，
+   于是表头分割线与行分割线都能贯通到卡片左右边框。
+   ========================================================================== */
+.card-table > .ant-card-body {
+  padding: 0;
+}
+
+/* 表格上方的工具条：与单元格同一条左基线 */
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 64px;
+  padding: 12px 24px;
+  border-bottom: 1px solid #e6e6e3;
+  flex-wrap: wrap;
+}
+
+/* 表头：无底色，字号收小、颜色转灰，靠字重与位置区分层级 */
+.ant-table-wrapper .ant-table-thead > tr > th {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+/* 最后一行不画底线：否则会和卡片下边框叠成两条线 */
+.ant-table-wrapper .ant-table-tbody > tr:last-child > td {
+  border-bottom: none;
+}
+
+/* 分页与单元格同基线，并与卡片上下边框留出距离 */
+.ant-table-wrapper .ant-pagination {
+  margin: 0 !important;
+  padding: 16px 24px;
+  border-top: 1px solid #e6e6e3;
+}
+
+.ant-table-wrapper .ant-table-pagination.ant-pagination {
+  border-top: 1px solid #e6e6e3;
+}
+
+/* 空状态：不能贴边，也不能被 padding:0 的单元格压扁 */
+.ant-table-wrapper .ant-table-placeholder > td {
+  padding: 0;
+}
+
+.ant-table-wrapper .ant-table-placeholder .ant-empty {
+  margin: 0;
+  padding: 56px 24px;
+}
+
+/* 小号表格在卡片里也不贴边 */
+.ant-table-wrapper .ant-table.ant-table-small .ant-table-thead > tr > th,
+.ant-table-wrapper .ant-table.ant-table-small .ant-table-tbody > tr > td {
+  padding-inline: 24px;
+}
+
+/* 表格内部的横向滚动条收窄，避免在卡片里显得笨重 */
+.ant-table-body::-webkit-scrollbar,
+.ant-table-content::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+.ant-table-body::-webkit-scrollbar-thumb,
+.ant-table-content::-webkit-scrollbar-thumb {
+  background: #d3d3ce;
+  border-radius: 4px;
+}
+
+.ant-table-body::-webkit-scrollbar-track,
+.ant-table-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 卡片之间不再靠 margin 拼间距，统一交给 .page 的 gap */
+.ant-card {
+  overflow: hidden;
+}
+
+/* 描述列表：标签列不抢戏 */
+.ant-descriptions .ant-descriptions-item-label {
+  color: #74746c;
+  font-size: 13px;
+}

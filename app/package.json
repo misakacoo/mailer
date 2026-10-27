@@ -1,0 +1,16 @@
+{
+  "name": "mailer",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "migrate": "pnpm --filter @mailer/api exec prisma migrate deploy",
+    "prisma:generate": "pnpm --filter @mailer/api exec prisma generate",
+    "dev:api": "pnpm --filter @mailer/api dev",
+    "dev:web": "pnpm --filter @mailer/web dev"
+  }
+}

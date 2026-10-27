@@ -1,0 +1,11 @@
+# 构建镜像时不需要的东西，传进去只会变慢、并且可能把本地状态带进镜像
+.git
+.github
+.workbuddy
+**/node_modules
+**/dist
+**/*.tgz
+**/*.log
+docs/shots
+list2.png
+deploy

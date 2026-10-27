@@ -1,0 +1,28 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建产物
+dist/
+build/
+*.tsbuildinfo
+
+# 环境变量（真实凭据绝不入库）
+.env
+.env.*
+!.env.example
+
+# Prisma
+apps/api/prisma/engines/
+apps/api/prisma/*.db
+
+# 运行时数据
+shared/uploads/*
+shared/tmp/*
+!shared/uploads/.gitkeep
+!shared/tmp/.gitkeep
+
+# 日志与临时文件
+*.log
+.DS_Store
+Thumbs.db

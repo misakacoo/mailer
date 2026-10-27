@@ -1,0 +1,25 @@
+{
+  "name": "@mailer/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "dev": "vite --host 127.0.0.1 --port 5173",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.5.2",
+    "antd": "^5.22.5",
+    "dayjs": "^1.11.13",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  }
+}

@@ -1,0 +1,32 @@
+[Unit]
+Description=Mailer API (NestJS, 面板与追踪接口)
+Documentation=file:///opt/mailer/DEPLOY.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=mailer
+Group=mailer
+WorkingDirectory=/opt/mailer
+EnvironmentFile=/etc/mailer/mailer.env
+ExecStart=/usr/local/bin/node /opt/mailer/apps/api/dist/main.js
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+KillSignal=SIGTERM
+SyslogIdentifier=mailer-api
+StandardOutput=journal
+StandardError=journal
+
+MemoryMax=1G
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/mailer/shared
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
