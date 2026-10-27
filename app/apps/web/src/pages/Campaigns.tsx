@@ -6,7 +6,6 @@ import {
   Checkbox,
   DatePicker,
   Drawer,
-  Dropdown,
   Empty,
   Input,
   InputNumber,
@@ -18,9 +17,19 @@ import {
   Steps,
   Switch,
   Table,
+  Tooltip,
   Typography,
 } from 'antd';
-import { MoreOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
+  ClockCircleOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  PauseCircleOutlined,
+  PlusOutlined,
+  ProfileOutlined,
+  ReloadOutlined,
+  UndoOutlined,
+} from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api } from '../api';
 import Section from '../components/Section';
@@ -704,40 +713,26 @@ export default function Campaigns() {
     },
     {
       title: '操作',
-      width: 200,
+      width: 190,
       render: (_: unknown, r: CampaignRow) => {
         // 回收站里只提供"恢复"和"彻底删除"，没有第三种选择
         if (r.deletedAt) {
           return (
-            <Space size={4}>
-              <Button size="small" onClick={() => void restore(r)}>
-                恢复
-              </Button>
-              <Button size="small" danger type="text" onClick={() => purge(r)}>
-                彻底删除
-              </Button>
+            <Space size={2}>
+              <Tooltip title="恢复到任务列表">
+                <Button size="small" type="text" icon={<UndoOutlined />} onClick={() => void restore(r)} />
+              </Tooltip>
+              <Popconfirm title="彻底删除后无法恢复，确认？" okText="彻底删除" cancelText="取消" onConfirm={() => purge(r)}>
+                <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+              </Popconfirm>
             </Space>
           );
         }
 
-        // 主操作留按钮，其余收进「更多」：一行五个文字按钮会把列撑成三行
-        const more: { key: string; label: string; danger?: boolean }[] = [];
-        if (r.status === 'draft') more.push({ key: 'edit', label: '编辑' });
-        if (r.status === 'scheduled') more.push({ key: 'unschedule', label: '取消排期' });
-        if (r.recurrence) more.push({ key: 'stopSeries', label: '停止周期' });
-        if (['draft', 'scheduled', 'paused', 'canceled', 'done'].includes(r.status)) {
-          more.push({ key: 'delete', label: '删除', danger: true });
-        }
-
-        const onMore = (key: string) => {
-          if (key === 'edit') void openEditDraft(r.id);
-          else if (key === 'unschedule') void unschedule(r.id);
-          else if (key === 'stopSeries') stopSeries(r);
-          else if (key === 'delete') remove(r);
-        };
-
+        // 状态相关的低频动作收成图标 + 悬浮说明；删除直接给图标，不再藏在二级菜单里
+        const canDelete = ['draft', 'scheduled', 'paused', 'canceled', 'done'].includes(r.status);
         return (
-          <Space size={4}>
+          <Space size={2}>
             {r.status === 'draft' && (
               <Button size="small" type="primary" onClick={() => act(r.id, 'start')}>
                 开始
@@ -758,13 +753,28 @@ export default function Campaigns() {
                 立即开始
               </Button>
             )}
-            <Button size="small" onClick={() => openDetail(r.id)}>
-              详情
-            </Button>
-            {more.length > 0 && (
-              <Dropdown menu={{ items: more, onClick: ({ key }) => onMore(key) }} trigger={['click']}>
-                <Button size="small" type="text" icon={<MoreOutlined />} />
-              </Dropdown>
+            <Tooltip title="详情">
+              <Button size="small" type="text" icon={<ProfileOutlined />} onClick={() => openDetail(r.id)} />
+            </Tooltip>
+            {r.status === 'draft' && (
+              <Tooltip title="编辑">
+                <Button size="small" type="text" icon={<EditOutlined />} onClick={() => void openEditDraft(r.id)} />
+              </Tooltip>
+            )}
+            {r.status === 'scheduled' && (
+              <Tooltip title="取消排期">
+                <Button size="small" type="text" icon={<ClockCircleOutlined />} onClick={() => void unschedule(r.id)} />
+              </Tooltip>
+            )}
+            {r.recurrence && (
+              <Tooltip title="停止整个周期序列">
+                <Button size="small" type="text" icon={<PauseCircleOutlined />} onClick={() => stopSeries(r)} />
+              </Tooltip>
+            )}
+            {canDelete && (
+              <Popconfirm title="确认删除该任务？" description="会进入回收站，可随时恢复" okText="删除" cancelText="取消" onConfirm={() => remove(r)}>
+                <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+              </Popconfirm>
             )}
           </Space>
         );

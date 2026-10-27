@@ -9,6 +9,7 @@ import Contacts from './pages/Contacts';
 import Dashboard from './pages/Dashboard';
 import Login from './pages/Login';
 import Reports from './pages/Reports';
+import Account from './pages/Account';
 import Settings from './pages/Settings';
 import Templates from './pages/Templates';
 
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="campaigns" element={<Campaigns />} />
         <Route path="reports" element={<Reports />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="account" element={<Account />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

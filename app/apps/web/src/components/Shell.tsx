@@ -9,6 +9,7 @@ import {
   LogoutOutlined,
   SendOutlined,
   SettingOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
@@ -24,6 +25,7 @@ const ITEMS = [
   { key: '/campaigns', icon: <SendOutlined />, label: '群发任务' },
   { key: '/reports', icon: <BarChartOutlined />, label: '统计报表' },
   { key: '/settings', icon: <SettingOutlined />, label: '系统运维' },
+  { key: '/account', icon: <UserOutlined />, label: '账号设置' },
 ];
 
 export default function Shell({ onLogout }: { onLogout: () => void }) {
@@ -163,7 +165,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
             }}
           >
             当前仍在使用初始密码，任何知道默认账号的人都能登录。
-            <Button type="link" size="small" onClick={() => nav('/settings')} style={{ padding: '0 4px' }}>
+            <Button type="link" size="small" onClick={() => nav('/account')} style={{ padding: '0 4px' }}>
               立即修改
             </Button>
           </div>

@@ -370,25 +370,6 @@ export default function Channels() {
       ),
     },
     {
-      title: '分组',
-      width: 150,
-      render: (_: unknown, r: ChannelRow) => {
-        // 只渲染还存在的分组：分组被删后可能留下悬空 id
-        const known = r.groupIds.filter((gid) => groups.some((g) => g.id === gid));
-        return known.length > 0 ? (
-          <Space size={4} wrap>
-            {known.map((gid) => (
-              <Tag key={gid} bordered={false} color="gold" style={{ marginInlineEnd: 0 }}>
-                {groups.find((g) => g.id === gid)?.name}
-              </Tag>
-            ))}
-          </Space>
-        ) : (
-          <span style={{ fontSize: 12, color: tokens.muted }}>未分组</span>
-        );
-      },
-    },
-    {
       title: '账号今日配额',
       width: 200,
       render: (_: unknown, r: ChannelRow) => {
@@ -465,9 +446,9 @@ export default function Channels() {
         <Space size={2}>
           {/* 只有「测试连接」保留文字：它是这一页最常用的动作，
               其余四个都是低频操作，收成图标 + 悬浮说明，列宽才够用 */}
-          <Button size="small" loading={testing === r.id} onClick={() => testRow(r)}>
-            测试连接
-          </Button>
+          <Tooltip title="测试连接">
+            <Button size="small" type="text" loading={testing === r.id} onClick={() => testRow(r)} icon={<ThunderboltOutlined />} />
+          </Tooltip>
           <Tooltip title="发一封测试邮件">
             <Button
               size="small"
@@ -652,7 +633,7 @@ export default function Channels() {
                 loading={loading}
                 dataSource={shownRows}
                 columns={columns as any}
-                scroll={{ x: 1080 }}
+                scroll={{ x: 930 }}
                 tableLayout="fixed"
                 pagination={false}
                 locale={{ emptyText: '还没有发件邮箱，点右上角「新增发件邮箱」' }}

@@ -6,7 +6,6 @@ import {
   Col,
   Descriptions,
   Empty,
-  Form,
   Input,
   Modal,
   Radio,
@@ -112,11 +111,6 @@ export default function Settings() {
   const [loadingCheck, setLoadingCheck] = useState(true);
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [checkedAt, setCheckedAt] = useState<string | null>(null);
-  const [accountInfo, setAccountInfo] = useState<{ account: string; mustChangePassword: boolean } | null>(
-    null,
-  );
-  const [accountForm] = Form.useForm();
-  const [savingAccount, setSavingAccount] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
   const [clearScope, setClearScope] = useState<'all' | '90'>('90');
   const [clearing, setClearing] = useState(false);
@@ -161,43 +155,6 @@ export default function Settings() {
     }
   }, []);
 
-  const loadAccount = useCallback(async () => {
-    try {
-      const r = await api<{ account: string; mustChangePassword: boolean }>('/auth/account');
-      setAccountInfo(r);
-      accountForm.setFieldsValue({ account: r.account });
-    } catch {
-      // 取不到就不显示，不影响其它区块
-    }
-  }, [accountForm]);
-
-  const saveAccount = async (v: {
-    account: string;
-    currentPassword: string;
-    newPassword?: string;
-    confirmPassword?: string;
-  }) => {
-    setSavingAccount(true);
-    try {
-      const r = await api<{ account: string; mustChangePassword: boolean }>('/auth/account', {
-        method: 'PATCH',
-        body: JSON.stringify({
-          account: v.account?.trim(),
-          currentPassword: v.currentPassword,
-          newPassword: v.newPassword || undefined,
-        }),
-      });
-      setAccountInfo(r);
-      accountForm.setFieldsValue({ account: r.account });
-      accountForm.resetFields(['currentPassword', 'newPassword', 'confirmPassword']);
-      message.success(r.mustChangePassword ? '已保存' : '已保存，下次登录请使用新账号与密码');
-    } catch (e: any) {
-      message.error(e?.message ?? '保存失败');
-    } finally {
-      setSavingAccount(false);
-    }
-  };
-
   const clearLogs = async () => {
     setClearing(true);
     try {
@@ -216,8 +173,7 @@ export default function Settings() {
 
   useEffect(() => {
     void runCheck();
-    void loadAccount();
-  }, [runCheck, loadAccount]);
+  }, [runCheck]);
 
   useEffect(() => {
     void loadLogs(page, pageSize, keyword);
@@ -380,90 +336,6 @@ export default function Settings() {
           </Section>
         </Col>
       </Row>
-
-      <Section
-        title="管理员账号"
-        desc="登录用的账号与密码。修改前需要验证当前密码，保存后立即生效，下次登录用新凭据"
-      >
-        <Card>
-          <Form
-            form={accountForm}
-            layout="vertical"
-            onFinish={saveAccount}
-            requiredMark={false}
-            style={{ maxWidth: 560 }}
-          >
-            {accountInfo?.mustChangePassword && (
-              <div
-                style={{
-                  padding: `12px ${metrics.cardPadding}px`,
-                  marginBottom: metrics.gridGutter,
-                  border: `1px solid ${tokens.warningSoft}`,
-                  background: tokens.warningSoft,
-                  borderRadius: metrics.cardRadius,
-                  color: tokens.warning,
-                  fontSize: 13,
-                }}
-              >
-                当前仍在使用初始密码，任何知道默认账号的人都能登录，请立刻修改。
-              </div>
-            )}
-
-            <Form.Item
-              label="登录账号"
-              name="account"
-              rules={[
-                { required: true, message: '请填写账号' },
-                { min: 3, message: '账号至少 3 位' },
-              ]}
-            >
-              <Input placeholder="admin 或 you@example.com" autoComplete="username" />
-            </Form.Item>
-
-            <Form.Item
-              label="当前密码"
-              name="currentPassword"
-              rules={[{ required: true, message: '请输入当前密码' }]}
-            >
-              <Input.Password placeholder="修改前需验证，防止他人拿到已登录的浏览器" autoComplete="current-password" />
-            </Form.Item>
-
-            <Row gutter={metrics.gridGutter}>
-              <Col span={12}>
-                <Form.Item
-                  label="新密码"
-                  name="newPassword"
-                  rules={[{ min: 6, message: '新密码至少 6 位' }]}
-                >
-                  <Input.Password placeholder="不改可留空" autoComplete="new-password" />
-                </Form.Item>
-              </Col>
-              <Col span={12}>
-                <Form.Item
-                  label="确认新密码"
-                  name="confirmPassword"
-                  dependencies={['newPassword']}
-                  rules={[
-                    ({ getFieldValue }) => ({
-                      validator(_, value) {
-                        const next = getFieldValue('newPassword');
-                        if (!next || !value || next === value) return Promise.resolve();
-                        return Promise.reject(new Error('两次输入不一致'));
-                      },
-                    }),
-                  ]}
-                >
-                  <Input.Password placeholder="再输一次" autoComplete="new-password" />
-                </Form.Item>
-              </Col>
-            </Row>
-
-            <Button type="primary" htmlType="submit" loading={savingAccount}>
-              保存
-            </Button>
-          </Form>
-        </Card>
-      </Section>
 
       <Section
         title="操作日志"

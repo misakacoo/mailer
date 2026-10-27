@@ -152,7 +152,7 @@ export default function Reports() {
   ];
 
   const campaignCols: ColumnsType<CampaignStat> = [
-    { title: '任务', dataIndex: 'fromEmail', ellipsis: true },
+    { title: '任务', dataIndex: 'name', ellipsis: true, render: (v: string) => v || <span style={{ color: tokens.muted }}>（未命名）</span> },
     { title: '状态', dataIndex: 'status', width: 100, render: (s: string) => statusTag(s) },
     {
       title: '总数',

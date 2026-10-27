@@ -289,12 +289,12 @@ export default function Contacts() {
     },
     {
       title: '操作',
-      width: 240,
+      width: 120,
       render: (_: unknown, r: ContactRow) => (
-        <Space size={4}>
-          <Button size="small" icon={<FolderOutlined />} onClick={() => openContactLists(r)}>
-            分组
-          </Button>
+        <Space size={2}>
+          <Tooltip title="调整分组">
+            <Button size="small" type="text" icon={<FolderOutlined />} onClick={() => openContactLists(r)} />
+          </Tooltip>
           <Popconfirm
             title="确认删除该联系人？"
             description="有投递历史的联系人无法删除；只是不想再发给他，可以把他移出所有分组"
@@ -302,7 +302,9 @@ export default function Contacts() {
             cancelText="取消"
             onConfirm={() => removeContact(r)}
           >
-            <Button size="small" danger icon={<DeleteOutlined />} />
+            <Tooltip title="删除">
+              <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
