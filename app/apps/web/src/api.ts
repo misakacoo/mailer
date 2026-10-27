@@ -126,12 +126,11 @@ export interface TrendPoint {
 
 export interface ChannelStat {
   id: number;
-  name: string;
+  fromEmail: string;
   host: string;
   username: string;
   status: string;
   channelCount: number;
-  minIntervalSec: number;
   usedToday: number;
   dailyLimit: number;
   remaining: number;

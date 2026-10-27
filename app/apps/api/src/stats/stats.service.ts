@@ -73,12 +73,11 @@ export class StatsService {
       this.prisma.channel.findMany({
         select: {
           id: true,
-          name: true,
+          fromEmail: true,
           host: true,
           username: true,
           status: true,
           dailyLimit: true,
-          minIntervalSec: true,
           sentToday: true,
           quotaDate: true,
           lastSentAt: true,
@@ -286,14 +285,13 @@ export class StatsService {
     const channels = await this.prisma.channel.findMany({
       select: {
         id: true,
-        name: true,
+        fromEmail: true,
         host: true,
         username: true,
         status: true,
         dailyLimit: true,
         sentToday: true,
         quotaDate: true,
-        minIntervalSec: true,
         lastSentAt: true,
         consecutiveFailures: true,
         lastError: true,
@@ -332,12 +330,11 @@ export class StatsService {
         const settled = m.sent + m.failed;
         return {
           id: p.channels[0].id,
-          name: p.label,
+          fromEmail: p.label,
           host: p.host,
           username: p.username,
           status: p.status,
           channelCount: p.channelCount,
-          minIntervalSec: p.minIntervalSec,
           usedToday: p.used,
           dailyLimit: p.limit,
           remaining: p.remaining,

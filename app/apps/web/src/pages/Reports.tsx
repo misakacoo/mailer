@@ -105,11 +105,14 @@ export default function Reports() {
   const channelCols: ColumnsType<ChannelStat> = [
     {
       title: '账号',
-      dataIndex: 'name',
+      dataIndex: 'fromEmail',
       render: (_, r) => (
         <div>
-          <div style={{ color: tokens.ink }}>{r.name}</div>
-          <div style={{ fontSize: 12, color: tokens.muted }}>{r.host}</div>
+          <div style={{ color: tokens.ink }}>{r.fromEmail}</div>
+          <div style={{ fontSize: 12, color: tokens.muted }}>
+            {r.username}
+            {r.channelCount > 1 ? ` · ${r.channelCount} 个发件邮箱` : ''}
+          </div>
         </div>
       ),
     },
@@ -123,7 +126,6 @@ export default function Reports() {
         </span>
       ),
     },
-    { title: '间隔', dataIndex: 'minIntervalSec', width: 88, render: (v: number) => <span className="mono">{v}s</span> },
     {
       title: '窗口内发送',
       dataIndex: 'sent',
@@ -150,7 +152,7 @@ export default function Reports() {
   ];
 
   const campaignCols: ColumnsType<CampaignStat> = [
-    { title: '任务', dataIndex: 'name', ellipsis: true },
+    { title: '任务', dataIndex: 'fromEmail', ellipsis: true },
     { title: '状态', dataIndex: 'status', width: 100, render: (s: string) => statusTag(s) },
     {
       title: '总数',

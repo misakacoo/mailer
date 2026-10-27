@@ -165,7 +165,7 @@ export class SenderService {
       await this.finishIfDone(campaign.id);
       return {
         action: 'sent',
-        waitMs: this.computeWait(channel, campaign, selection.minIntervalSec),
+        waitMs: this.computeWait(campaign),
         campaignId: campaign.id,
         email: claimed.email,
       };
@@ -182,7 +182,7 @@ export class SenderService {
       await this.finishIfDone(campaign.id);
       return {
         action: 'failed',
-        waitMs: this.computeWait(channel, campaign, selection.minIntervalSec),
+        waitMs: this.computeWait(campaign),
         campaignId: campaign.id,
         email: claimed.email,
         detail: result.message,
@@ -204,7 +204,7 @@ export class SenderService {
       await this.finishIfDone(campaign.id);
       return {
         action: 'failed',
-        waitMs: this.computeWait(channel, campaign, selection.minIntervalSec),
+        waitMs: this.computeWait(campaign),
         campaignId: campaign.id,
         email: claimed.email,
         detail: result.message,
@@ -228,7 +228,7 @@ export class SenderService {
     );
     return {
       action: 'retry',
-      waitMs: this.computeWait(channel, campaign, selection.minIntervalSec),
+      waitMs: this.computeWait(campaign),
       campaignId: campaign.id,
       email: claimed.email,
       detail: result.message,
@@ -294,16 +294,17 @@ export class SenderService {
   }
 
   /**
-   * 选通道：状态正常、账号池今日还有配额、并且已经过了账号级发送间隔。
+   * 选通道：状态正常、账号池今日还有配额。
    *
    * 同一 SMTP 账号可能有多条通道（不同发信身份），它们共用一本账：
-   * 配额、最近发送时间、最小间隔都必须按账号池判断，不能各算各的。
+   * 配额按账号池判断，不能各算各的。发送节奏由任务的间隔设置决定，
+   * 这里不再有通道/账号级的间隔约束——两处约束只会让人配置时互相打架。
    * 同优先级下优先用今天发得少的账号，把额度摊平。
    */
   private async selectChannel(
     campaign: Campaign,
     day: string,
-  ): Promise<{ channel: Channel | null; readyInMs: number; minIntervalSec: number }> {
+  ): Promise<{ channel: Channel | null; readyInMs: number }> {
     const all = await this.prisma.channel.findMany();
     const pools = groupAccounts(all, day);
     // 选择顺序：分组 > 指定通道 > 全部。
@@ -316,38 +317,23 @@ export class SenderService {
           ? all.filter((c) => campaign.channelIds.includes(c.id))
           : all;
 
-    const now = Date.now();
     const usable: { c: Channel; pool: AccountPool<Channel>; used: number }[] = [];
-    let earliest = Number.POSITIVE_INFINITY;
 
     for (const c of scoped) {
       if (c.status !== 'active') continue;
       const pool = pools.get(accountKey(c.host, c.username));
       if (!pool || pool.remaining <= 0) continue;
-
-      const readyAt = pool.lastSentAt
-        ? pool.lastSentAt.getTime() + pool.minIntervalSec * 1000
-        : 0;
-      if (readyAt > now) {
-        earliest = Math.min(earliest, readyAt - now);
-        continue;
-      }
       usable.push({ c, pool, used: pool.used });
     }
 
     if (usable.length === 0) {
-      return {
-        channel: null,
-        readyInMs: Number.isFinite(earliest) ? earliest : NO_CHANNEL_WAIT_MS,
-        minIntervalSec: 0,
-      };
+      return { channel: null, readyInMs: NO_CHANNEL_WAIT_MS };
     }
 
     usable.sort((a, b) => b.c.priority - a.c.priority || a.used - b.used || a.c.id - b.c.id);
-    return { channel: usable[0].c, readyInMs: 0, minIntervalSec: usable[0].pool.minIntervalSec };
+    return { channel: usable[0].c, readyInMs: 0 };
   }
 
-  /** 账号间隔与任务间隔取严：两者都必须满足才能发下一封 */
   /**
    * 任务当前的发送间隔（毫秒）。
    * 只设了最小间隔就是固定间隔；设了最大间隔就在 [min, max] 里随机，
@@ -365,14 +351,11 @@ export class SenderService {
     return gap;
   }
 
-  private computeWait(channel: Channel, campaign: Campaign, minIntervalSec: number): number {
+  private computeWait(campaign: Campaign): number {
     const now = Date.now();
-    const channelWait = channel.lastSentAt
-      ? channel.lastSentAt.getTime() + minIntervalSec * 1000 - now
-      : 0;
     const lastCampaign = this.lastSendByCampaign.get(campaign.id) ?? 0;
     const campaignWait = lastCampaign ? lastCampaign + this.gapFor(campaign) - now : 0;
-    return Math.min(Math.max(0, channelWait, campaignWait), MAX_SLEEP_MS);
+    return Math.min(Math.max(0, campaignWait), MAX_SLEEP_MS);
   }
 
   /** 队列空了就把任务标记完成，避免停在 running 让人以为还在发 */

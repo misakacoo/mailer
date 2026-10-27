@@ -171,12 +171,10 @@ interface ChannelGroupOpt {
 
 interface ChannelOpt {
   id: number;
-  name: string;
   groupIds: number[];
   fromEmail: string;
   remaining: number;
   status: string;
-  minIntervalSec: number;
   accountChannelCount?: number;
   sharedQuota?: boolean;
 }
@@ -500,17 +498,12 @@ export default function Campaigns() {
 
   const estimateMinutes = useMemo(() => {
     if (estimateCount === 0) return 0;
-    const picked =
-      draft.channelGroupIds.length > 0
-        ? channels.filter((c) => c.groupIds.some((gid) => draft.channelGroupIds.includes(gid)))
-        : channels.filter((c) => draft.channelIds.includes(c.id));
-    const channelGap = picked.length ? Math.min(...picked.map((c) => c.minIntervalSec)) : 30;
-    const taskGap = draft.sendIntervalMaxSec && draft.sendIntervalMaxSec > draft.sendIntervalSec
+    // 发送节奏只由任务自己的间隔决定；通道没有独立间隔，服务商的硬限制由每日配额兜住
+    const gap = draft.sendIntervalMaxSec && draft.sendIntervalMaxSec > draft.sendIntervalSec
       ? (draft.sendIntervalSec + draft.sendIntervalMaxSec) / 2
       : draft.sendIntervalSec;
-    const gap = Math.max(taskGap, channelGap);
     return Math.ceil((estimateCount * gap) / 60);
-  }, [estimateCount, channels, draft.channelIds, draft.channelGroupIds, draft.sendIntervalSec, draft.sendIntervalMaxSec]);
+  }, [estimateCount, draft.sendIntervalSec, draft.sendIntervalMaxSec]);
 
   const variantsReady =
     draft.variants.length === 0 ||
@@ -1136,7 +1129,7 @@ export default function Campaigns() {
               <div style={{ fontSize: 12, color: tokens.muted, marginTop: 6 }}>
                 {draft.sendIntervalMaxSec && draft.sendIntervalMaxSec >= draft.sendIntervalSec
                   ? `每封之间在 ${draft.sendIntervalSec}–${draft.sendIntervalMaxSec} 秒内随机，节奏更像真人，也更不容易被判定为批量群发。`
-                  : '只填最小间隔就是固定间隔。填上最大间隔后，每封之间会在区间内随机；实际间隔同时受账号最小间隔约束。'}
+                  : '只填最小间隔就是固定间隔。填上最大间隔后，每封之间会在区间内随机；实际发送节奏只由这里的间隔决定。'}
                 {draft.sendIntervalMaxSec !== null && draft.sendIntervalMaxSec < draft.sendIntervalSec && (
                   <span style={{ color: tokens.destructive }}> 最大间隔不能小于最小间隔。</span>
                 )}

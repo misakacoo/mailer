@@ -16,7 +16,6 @@ export interface AppConfig {
   tmpDir: string;
   logLevel: string;
   defaultDailyLimit: number;
-  defaultMinIntervalSec: number;
   /** 备份目录，用于运维自检里判断"上次备份是什么时候"。未配置则跳过该检查。 */
   backupDir: string | null;
   /** 站点证书路径，用于到期提醒。未配置则跳过该检查。 */
@@ -114,7 +113,6 @@ export function loadConfig(): AppConfig {
     tmpDir: process.env.TMP_DIR?.trim() || uploadDir,
     logLevel: process.env.LOG_LEVEL?.trim() || 'info',
     defaultDailyLimit: int(process.env.DEFAULT_DAILY_LIMIT, 50),
-    defaultMinIntervalSec: int(process.env.DEFAULT_MIN_INTERVAL_SEC, 30),
     backupDir: process.env.BACKUP_DIR?.trim() || null,
     tlsCertPath: process.env.TLS_CERT_PATH?.trim() || null,
   };

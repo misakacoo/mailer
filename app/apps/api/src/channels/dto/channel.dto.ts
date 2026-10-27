@@ -14,11 +14,6 @@ import {
 
 export class CreateChannelDto {
   @IsString()
-  @MinLength(1, { message: '请填写通道名称' })
-  @MaxLength(64)
-  name: string;
-
-  @IsString()
   @MinLength(1, { message: '请填写 SMTP 服务器' })
   @MaxLength(255)
   host: string;
@@ -60,13 +55,6 @@ export class CreateChannelDto {
   @Max(100000)
   @Type(() => Number)
   dailyLimit?: number;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(3600)
-  @Type(() => Number)
-  minIntervalSec?: number;
 
   @IsOptional()
   @IsArray()
@@ -137,13 +125,6 @@ export class UpdateChannelDto {
   @Max(100000)
   @Type(() => Number)
   dailyLimit?: number;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(3600)
-  @Type(() => Number)
-  minIntervalSec?: number;
 
   @IsOptional()
   @IsArray()

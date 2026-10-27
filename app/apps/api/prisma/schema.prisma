@@ -40,7 +40,6 @@ model ChannelGroup {
 
 model Channel {
   id                  Int       @id @default(autoincrement())
-  name                String
   host                String
   port                Int       @default(465)
   secure              Boolean   @default(true) // true=SSL(465) false=STARTTLS(587)
@@ -53,7 +52,6 @@ model Channel {
   dailyLimit          Int       @default(50) @map("daily_limit") // 账号级设置：同 host+username 共享
   sentToday           Int       @default(0) @map("sent_today") // 本通道计数；账号已用 = 同账号所有通道之和
   quotaDate           DateTime? @map("quota_date") @db.Date
-  minIntervalSec      Int       @default(30) @map("min_interval_sec") // 账号级设置：同 host+username 共享
   priority            Int       @default(0) // 数值越大越优先被调度
 
   status              String    @default("active") // active | paused | error

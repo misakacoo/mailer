@@ -16,7 +16,6 @@ import { SMTP_PRESETS } from './presets';
 
 export interface PublicChannel {
   id: number;
-  name: string;
   groupIds: number[];
   host: string;
   port: number;
@@ -28,7 +27,6 @@ export interface PublicChannel {
   dailyLimit: number;
   sentToday: number;
   remaining: number;
-  minIntervalSec: number;
   priority: number;
   status: string;
   consecutiveFailures: number;
@@ -75,20 +73,16 @@ export class ChannelsService {
     const username = dto.username.trim();
     const siblings = await this.findAccountChannels(host, username);
 
-    // 同一个 SMTP 账号只认一本账：新增发信身份时沿用账号已有上限与间隔，
+    // 同一个 SMTP 账号只认一本账：新增发信身份时沿用账号已有上限，
     // 避免用「新增一条通道」把账号额度悄悄放大。
     const accountLimit = siblings.length
       ? Math.min(...siblings.map((c) => c.dailyLimit))
       : dto.dailyLimit ?? this.cfg.defaultDailyLimit;
-    const accountInterval = siblings.length
-      ? Math.max(...siblings.map((c) => c.minIntervalSec))
-      : dto.minIntervalSec ?? this.cfg.defaultMinIntervalSec;
 
     const passwordEnc = encryptSecret(dto.password, this.cfg.credKey);
     const created = await this.prisma.$transaction(async (tx) => {
       const row = await tx.channel.create({
         data: {
-          name: dto.name.trim(),
           host,
           port: dto.port,
           secure: dto.secure,
@@ -98,7 +92,6 @@ export class ChannelsService {
           fromEmail: dto.fromEmail.trim().toLowerCase(),
           replyTo: dto.replyTo?.trim().toLowerCase() || null,
           dailyLimit: accountLimit,
-          minIntervalSec: accountInterval,
           priority: dto.priority ?? 0,
           groupIds: dto.groupIds ?? [],
           quotaDate: dayToDbDate(day),
@@ -118,7 +111,6 @@ export class ChannelsService {
             username,
             passwordEnc: encryptSecret(dto.password, this.cfg.credKey),
             dailyLimit: accountLimit,
-            minIntervalSec: accountInterval,
           },
         });
       }
@@ -143,7 +135,6 @@ export class ChannelsService {
     if (dto.secure !== undefined) accountData.secure = dto.secure;
     if (dto.username !== undefined) accountData.username = dto.username.trim();
     if (dto.dailyLimit !== undefined) accountData.dailyLimit = dto.dailyLimit;
-    if (dto.minIntervalSec !== undefined) accountData.minIntervalSec = dto.minIntervalSec;
 
     // 密码留空表示不修改：前端编辑时不会拿到明文，也就无法原样回传。
     // 密码本身在事务里逐条重新加密，避免同账号多条通道的密文完全相同。
@@ -156,7 +147,6 @@ export class ChannelsService {
     // 只影响当前发信身份的字段
     // 用 Unchecked 变体才能直接写 groupId 这个外键标量（带关系时 UpdateInput 会隐藏它）
     const channelData: Prisma.ChannelUncheckedUpdateInput = {};
-    if (dto.name !== undefined) channelData.name = dto.name.trim();
     if (dto.fromName !== undefined) channelData.fromName = dto.fromName?.trim() || null;
     if (dto.fromEmail !== undefined) channelData.fromEmail = dto.fromEmail.trim().toLowerCase();
     if (dto.replyTo !== undefined) channelData.replyTo = dto.replyTo?.trim().toLowerCase() || null;
@@ -246,7 +236,6 @@ export class ChannelsService {
     const plainPassword = this.credentialFromChannel(src).password;
     const created = await this.prisma.channel.create({
       data: {
-        name: `${src.name} 副本`,
         host: src.host,
         port: src.port,
         secure: src.secure,
@@ -256,7 +245,6 @@ export class ChannelsService {
         fromEmail: src.fromEmail,
         replyTo: src.replyTo,
         dailyLimit: pool?.limit ?? src.dailyLimit,
-        minIntervalSec: pool?.minIntervalSec ?? src.minIntervalSec,
         priority: src.priority,
         status: 'active',
         // 账号已发数由所有通道汇总，新通道必须从 0 开始，否则会重复计数
@@ -327,11 +315,11 @@ export class ChannelsService {
     const transporter = buildTransporter(cred);
 
     const now = new Date().toLocaleString('zh-CN', { timeZone: BUSINESS_TZ });
-    const subject = `[通道测试] ${channel.name} · ${now}`;
+    const subject = `[通道测试] ${channel.fromEmail} · ${now}`;
     const text = [
       '这是一封来自邮件营销系统的通道测试邮件。',
       '',
-      `通道名称：${channel.name}`,
+      `发信地址：${channel.fromEmail}`,
       `SMTP：${channel.host}:${channel.port}（${channel.secure ? 'SSL/TLS' : 'STARTTLS'}）`,
       `发信地址：${channel.fromEmail}`,
       `发送时间：${now}`,
@@ -343,7 +331,7 @@ export class ChannelsService {
   <p><b>通道测试通过</b></p>
   <p>这是一封来自邮件营销系统的通道测试邮件。</p>
   <table cellpadding="6" style="border-collapse:collapse;font-size:13px">
-    <tr><td style="color:#6b7280">通道名称</td><td>${escapeHtml(channel.name)}</td></tr>
+    <tr><td style="color:#6b7280">发信地址</td><td>${escapeHtml(channel.fromEmail)}</td></tr>
     <tr><td style="color:#6b7280">SMTP</td><td>${escapeHtml(channel.host)}:${channel.port}（${channel.secure ? 'SSL/TLS' : 'STARTTLS'}）</td></tr>
     <tr><td style="color:#6b7280">发信地址</td><td>${escapeHtml(channel.fromEmail)}</td></tr>
     <tr><td style="color:#6b7280">发送时间</td><td>${escapeHtml(now)}</td></tr>
@@ -541,7 +529,6 @@ export class ChannelsService {
     const accountRemaining = pool?.remaining ?? Math.max(0, accountLimit - accountUsed);
     return {
       id: c.id,
-      name: c.name,
       host: c.host,
       port: c.port,
       secure: c.secure,
@@ -554,7 +541,6 @@ export class ChannelsService {
       dailyLimit: accountLimit,
       sentToday: accountUsed,
       remaining: accountRemaining,
-      minIntervalSec: pool?.minIntervalSec ?? c.minIntervalSec,
       priority: c.priority,
       status: c.status,
       consecutiveFailures: c.consecutiveFailures,

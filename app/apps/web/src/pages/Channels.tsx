@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert,
   App as AntApp,
   Button,
   Card,
+  Col,
+  Dropdown,
   Form,
   Input,
   InputNumber,
   Modal,
   Popconfirm,
   Progress,
+  Row,
   Select,
   Space,
   Switch,
@@ -22,6 +24,7 @@ import {
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
+  MoreOutlined,
   PlusOutlined,
   SendOutlined,
   ThunderboltOutlined,
@@ -41,7 +44,6 @@ interface ChannelGroupRow {
 
 interface ChannelRow {
   id: number;
-  name: string;
   groupIds: number[];
   host: string;
   port: number;
@@ -53,7 +55,6 @@ interface ChannelRow {
   dailyLimit: number;
   sentToday: number;
   remaining: number;
-  minIntervalSec: number;
   priority: number;
   status: string;
   consecutiveFailures: number;
@@ -81,7 +82,6 @@ interface Preset {
 
 interface ChannelForm {
   preset?: string;
-  name: string;
   host: string;
   port: number;
   secure: boolean;
@@ -91,7 +91,6 @@ interface ChannelForm {
   fromEmail: string;
   replyTo?: string;
   dailyLimit: number;
-  minIntervalSec: number;
   priority: number;
   groupIds?: number[];
 }
@@ -107,7 +106,6 @@ export default function Channels() {
   const [rows, setRows] = useState<ChannelRow[]>([]);
   const [groups, setGroups] = useState<ChannelGroupRow[]>([]);
   const [groupFilter, setGroupFilter] = useState<number | 'all' | 'none'>('all');
-  const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [groupBusy, setGroupBusy] = useState(false);
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -153,7 +151,6 @@ export default function Channels() {
       port: qq?.port ?? 465,
       secure: qq?.secure ?? true,
       dailyLimit: 50,
-      minIntervalSec: 30,
       priority: 0,
     });
     setFormOpen(true);
@@ -163,7 +160,6 @@ export default function Channels() {
     setEditing(row);
     form.resetFields();
     form.setFieldsValue({
-      name: row.name,
       host: row.host,
       port: row.port,
       secure: row.secure,
@@ -173,7 +169,6 @@ export default function Channels() {
       fromEmail: row.fromEmail,
       replyTo: row.replyTo ?? undefined,
       dailyLimit: row.dailyLimit,
-      minIntervalSec: row.minIntervalSec,
       priority: row.priority,
       groupIds: row.groupIds ?? [],
     });
@@ -196,9 +191,12 @@ export default function Channels() {
     }
     setGroupBusy(true);
     try {
-      await api('/channel-groups', { method: 'POST', body: JSON.stringify({ name }) });
+      const created = await api<{ id: number }>('/channel-groups', {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      });
       setNewGroupName('');
-      message.success('已创建分组');
+      setGroupFilter(created.id);
       await load();
     } catch (e: any) {
       message.error(e?.message ?? '创建失败');
@@ -211,7 +209,6 @@ export default function Channels() {
     if (!name.trim() || name.trim() === g.name) return;
     try {
       await api(`/channel-groups/${g.id}`, { method: 'PATCH', body: JSON.stringify({ name: name.trim() }) });
-      message.success('已重命名');
       await load();
     } catch (e: any) {
       message.error(e?.message ?? '重命名失败');
@@ -221,7 +218,7 @@ export default function Channels() {
   const removeGroup = async (g: ChannelGroupRow) => {
     try {
       const r = await api<{ ungrouped: number }>(`/channel-groups/${g.id}`, { method: 'DELETE' });
-      message.success(r.ungrouped > 0 ? `已删除分组，${r.ungrouped} 条通道变为未分组` : '已删除分组');
+      message.success(r.ungrouped > 0 ? `已删除分组，${r.ungrouped} 个发件邮箱变为未分组` : '已删除分组');
       setGroupFilter('all');
       await load();
     } catch (e: any) {
@@ -242,8 +239,8 @@ export default function Channels() {
         const created = await api<ChannelRow>('/channels', { method: 'POST', body: JSON.stringify(body) });
         message.success(
           created.sharedQuota
-            ? `已添加发信身份；该 SMTP 账号已有 ${created.accountChannelCount} 条通道，共用 ${created.accountLimit} 封/天`
-            : '已添加发件账号',
+            ? `已添加发件邮箱；该 SMTP 账号已有 ${created.accountChannelCount} 个发件邮箱，共用 ${created.accountLimit} 封/天`
+            : '已添加发件邮箱',
         );
       }
       setFormOpen(false);
@@ -325,7 +322,7 @@ export default function Channels() {
   const duplicate = async (row: ChannelRow) => {
     try {
       const created = await api<ChannelRow>(`/channels/${row.id}/duplicate`, { method: 'POST' });
-      message.success(`已复制发信身份；配额仍与同账号的 ${created.accountChannelCount} 条通道共享`);
+      message.success(`已复制；配额仍与同账号的 ${created.accountChannelCount} 个发件邮箱共享`);
       await load();
     } catch (e: any) {
       message.error(e?.message ?? '复制失败');
@@ -356,23 +353,25 @@ export default function Channels() {
 
   const columns = [
     {
-      title: '名称',
-      dataIndex: 'name',
-      width: 190,
+      title: '发信邮箱',
+      dataIndex: 'fromEmail',
+      width: 230,
       render: (v: string, r: ChannelRow) => (
         <Space direction="vertical" size={0} style={{ maxWidth: '100%' }}>
           <Typography.Text strong ellipsis={{ tooltip: v }}>
             {v}
           </Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis={{ tooltip: r.fromEmail }}>
-            {r.fromEmail}
-          </Typography.Text>
+          {r.fromName && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis={{ tooltip: r.fromName }}>
+              {r.fromName}
+            </Typography.Text>
+          )}
         </Space>
       ),
     },
     {
       title: '分组',
-      width: 160,
+      width: 150,
       render: (_: unknown, r: ChannelRow) => {
         // 只渲染还存在的分组：分组被删后可能留下悬空 id
         const known = r.groupIds.filter((gid) => groups.some((g) => g.id === gid));
@@ -388,23 +387,6 @@ export default function Channels() {
           <span style={{ fontSize: 12, color: tokens.muted }}>未分组</span>
         );
       },
-    },
-    {
-      title: 'SMTP',
-      width: 214,
-      render: (_: unknown, r: ChannelRow) => (
-        <Space direction="vertical" size={2}>
-          <Space size={6}>
-            <span className="mono">{r.host}:{r.port}</span>
-            <Tag bordered={false} style={{ marginInlineEnd: 0, fontSize: 11 }}>
-              {r.secure ? 'SSL' : 'STARTTLS'}
-            </Tag>
-          </Space>
-          <span className="mono" style={{ fontSize: 11, color: tokens.muted }}>
-            {r.username}
-          </span>
-        </Space>
-      ),
     },
     {
       title: '账号今日配额',
@@ -429,7 +411,7 @@ export default function Channels() {
             </div>
             {r.sharedQuota && (
               <span style={{ fontSize: 11, color: tokens.muted }}>
-                与另外 {r.accountChannelCount - 1} 条通道共享额度
+                与另外 {r.accountChannelCount - 1} 个发件邮箱共享额度
               </span>
             )}
           </Space>
@@ -437,14 +419,8 @@ export default function Channels() {
       },
     },
     {
-      title: '间隔',
-      dataIndex: 'minIntervalSec',
-      width: 80,
-      render: (v: number) => `${v}s`,
-    },
-    {
       title: '状态',
-      width: 140,
+      width: 130,
       render: (_: unknown, r: ChannelRow) => {
         const t = STATUS_TAG[r.status] ?? { color: 'default', text: r.status };
         const tag = (
@@ -470,7 +446,7 @@ export default function Channels() {
     },
     {
       title: '最近',
-      width: 150,
+      width: 145,
       render: (_: unknown, r: ChannelRow) => (
         <Space direction="vertical" size={0}>
           <Typography.Text style={{ fontSize: 12 }} type="secondary">
@@ -484,7 +460,7 @@ export default function Channels() {
     },
     {
       title: '操作',
-      width: 232,
+      width: 225,
       render: (_: unknown, r: ChannelRow) => (
         <Space size={2}>
           {/* 只有「测试连接」保留文字：它是这一页最常用的动作，
@@ -506,10 +482,10 @@ export default function Channels() {
           <Tooltip title="编辑">
             <Button size="small" type="text" icon={<EditOutlined />} onClick={() => openEdit(r)} />
           </Tooltip>
-          <Tooltip title="复制发信身份（共享账号配额）">
+          <Tooltip title="复制发件邮箱（共享账号配额）">
             <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => duplicate(r)} />
           </Tooltip>
-          <Popconfirm title="确认删除这条通道？" onConfirm={() => remove(r)} okText="删除" cancelText="取消">
+          <Popconfirm title="确认删除这个发件邮箱？" onConfirm={() => remove(r)} okText="删除" cancelText="取消">
             <Button size="small" type="text" danger icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
@@ -525,112 +501,169 @@ export default function Channels() {
         ? rows.filter((r) => r.groupIds.length === 0)
         : rows.filter((r) => r.groupIds.includes(groupFilter as number));
 
+  const groupItems = [
+    { key: 'all' as const, name: '全部发件邮箱', count: rows.length },
+    { key: 'none' as const, name: '未分组', count: rows.filter((r) => r.groupIds.length === 0).length },
+  ];
+  const activeGroupName =
+    groupFilter === 'all'
+      ? '全部发件邮箱'
+      : groupFilter === 'none'
+        ? '未分组'
+        : groups.find((g) => g.id === groupFilter)?.name ?? '发件邮箱';
+
   return (
     <div className="page">
       <PageHeader
         title="发件账号"
-        desc={`共 ${rows.length} 条通道 · ${accountCount} 个真实 SMTP 账号，可按业务线分组，任务里按分组选号`}
+        desc={`共 ${rows.length} 个发件邮箱 · ${accountCount} 个真实 SMTP 账号。左侧选分组，任务里按分组选号`}
         extra={
-          <>
-            <Select
-              style={{ width: 176 }}
-              value={groupFilter}
-              onChange={setGroupFilter}
-              options={[
-                { value: 'all', label: `全部分组（${rows.length}）` },
-                { value: 'none', label: `未分组（${rows.filter((r) => r.groupIds.length === 0).length}）` },
-                ...groups.map((g) => ({ value: g.id, label: `${g.name}（${g.channelCount}）` })),
-              ]}
-            />
-            <Button onClick={() => setGroupModalOpen(true)}>管理分组</Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              新增账号
-            </Button>
-          </>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            新增发件邮箱
+          </Button>
         }
       />
 
-      <Section
-        title="通道列表"
-        desc="配额按真实邮箱账号计算：同一 SMTP 账号下的多条通道共用一个每日配额与发送间隔，拆成多条只改变发信身份，不会增加额度。"
-      >
-        <Card className="card-table">
-          <Table<ChannelRow>
-            rowKey="id"
-            loading={loading}
-            dataSource={shownRows}
-            columns={columns as any}
-            scroll={{ x: 1352 }}
-            tableLayout="fixed"
-            pagination={false}
-            locale={{ emptyText: '还没有发件账号，点右上角「新增账号」' }}
-          />
-        </Card>
-      </Section>
+      <Row gutter={metrics.gridGutter}>
+        <Col span={4}>
+          <Section title="分组">
+            <Card styles={{ body: { padding: 0 } }}>
+              {groupItems.map((item, i) => {
+                const active = groupFilter === item.key;
+                return (
+                  <div
+                    key={item.key}
+                    onClick={() => setGroupFilter(item.key)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: metrics.tight,
+                      padding: `10px ${metrics.cardPaddingCompact}px`,
+                      borderTop: i === 0 ? 'none' : `1px solid ${tokens.border}`,
+                      cursor: 'pointer',
+                      background: active ? tokens.primarySoft : 'transparent',
+                      color: active ? tokens.primary : tokens.foreground,
+                      fontWeight: active ? 500 : 400,
+                      fontSize: 13,
+                    }}
+                  >
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {item.name}
+                    </span>
+                    <span style={{ color: active ? tokens.primary : tokens.muted, fontVariantNumeric: 'tabular-nums' }}>
+                      {item.count}
+                    </span>
+                  </div>
+                );
+              })}
+              {groups.map((g, i) => {
+                const active = groupFilter === g.id;
+                return (
+                  <div
+                    key={g.id}
+                    onClick={() => setGroupFilter(g.id)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: metrics.tight,
+                      padding: `10px ${metrics.cardPaddingCompact}px`,
+                      borderTop: `1px solid ${tokens.border}`,
+                      cursor: 'pointer',
+                      background: active ? tokens.primarySoft : 'transparent',
+                      color: active ? tokens.primary : tokens.foreground,
+                      fontWeight: active ? 500 : 400,
+                      fontSize: 13,
+                    }}
+                  >
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {g.name}
+                    </span>
+                    <span style={{ color: active ? tokens.primary : tokens.muted, fontVariantNumeric: 'tabular-nums' }}>
+                      {g.channelCount}
+                    </span>
+                    <Dropdown
+                      trigger={['click']}
+                      menu={{
+                        items: [
+                          { key: 'rename', label: '重命名', icon: <EditOutlined /> },
+                          { key: 'delete', label: '删除分组', icon: <DeleteOutlined />, danger: true },
+                        ],
+                        onClick: ({ key, domEvent }) => {
+                          domEvent.stopPropagation();
+                          if (key === 'rename') {
+                            let newName = g.name;
+                            modal.confirm({
+                              title: '重命名分组',
+                              content: (
+                                <Input
+                                  defaultValue={g.name}
+                                  maxLength={32}
+                                  onChange={(e) => {
+                                    newName = e.target.value;
+                                  }}
+                                />
+                              ),
+                              onOk: () => renameGroup(g, newName),
+                            });
+                          } else {
+                            void removeGroup(g);
+                          }
+                        },
+                      }}
+                    >
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<MoreOutlined />}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </Dropdown>
+                  </div>
+                );
+              })}
+              <div style={{ padding: `10px ${metrics.cardPaddingCompact}px`, borderTop: `1px solid ${tokens.border}` }}>
+                <Space.Compact style={{ width: '100%' }}>
+                  <Input
+                    size="small"
+                    placeholder="新建分组"
+                    value={newGroupName}
+                    onChange={(e) => setNewGroupName(e.target.value)}
+                    onPressEnter={() => void createGroup()}
+                    maxLength={32}
+                  />
+                  <Button size="small" loading={groupBusy} onClick={() => void createGroup()}>
+                    添加
+                  </Button>
+                </Space.Compact>
+              </div>
+            </Card>
+          </Section>
+        </Col>
 
-      <Modal
-        open={groupModalOpen}
-        title="发件分组"
-        onCancel={() => setGroupModalOpen(false)}
-        footer={null}
-        width={520}
-      >
-        <div style={{ fontSize: 12, color: tokens.muted, marginBottom: 12, lineHeight: 1.7 }}>
-          分组的用途是「按业务线选号」：任务里选分组即可，不必逐条挑通道。
-          删除分组只解除归属，不会删除账号。
-        </div>
-        <Space.Compact style={{ width: '100%', marginBottom: 16 }}>
-          <Input
-            placeholder="新建分组，例如「营销线」"
-            value={newGroupName}
-            onChange={(e) => setNewGroupName(e.target.value)}
-            onPressEnter={() => void createGroup()}
-            maxLength={32}
-          />
-          <Button type="primary" loading={groupBusy} onClick={() => void createGroup()}>
-            新建
-          </Button>
-        </Space.Compact>
-        {groups.length === 0 ? (
-          <div style={{ fontSize: 13, color: tokens.muted, padding: '12px 0' }}>还没有分组</div>
-        ) : (
-          groups.map((g, i) => (
-            <div
-              key={g.id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '8px 0',
-                borderTop: i === 0 ? 'none' : `1px solid ${tokens.border}`,
-              }}
-            >
-              <Input
-                size="small"
-                defaultValue={g.name}
-                onBlur={(e) => void renameGroup(g, e.target.value)}
-                style={{ flex: 1 }}
-                maxLength={32}
+        <Col span={20}>
+          <Section
+            title={activeGroupName}
+            desc={`配额按真实 SMTP 账号计算：同一个账号下的多个发件邮箱共用一本每日额度。发送节奏由任务里的间隔设置决定，这里不再单独配置。`}
+            style={{ height: '100%' }}
+          >
+            <Card className="card-table" style={{ height: '100%' }}>
+              <Table<ChannelRow>
+                rowKey="id"
+                loading={loading}
+                dataSource={shownRows}
+                columns={columns as any}
+                scroll={{ x: 1080 }}
+                tableLayout="fixed"
+                pagination={false}
+                locale={{ emptyText: '还没有发件邮箱，点右上角「新增发件邮箱」' }}
               />
-              <span style={{ fontSize: 12, color: tokens.muted, width: 72, textAlign: 'right' }}>
-                {g.channelCount} 条通道
-              </span>
-              <Popconfirm
-                title={`删除分组「${g.name}」？`}
-                description="组内通道会变成未分组，账号本身保留"
-                okText="删除"
-                cancelText="取消"
-                onConfirm={() => void removeGroup(g)}
-              >
-                <Button size="small" danger type="text" icon={<DeleteOutlined />} />
-              </Popconfirm>
-            </div>
-          ))
-        )}
-      </Modal>
+            </Card>
+          </Section>
+        </Col>
+      </Row>
 
       <Modal
-        title={editing ? `编辑发信身份 · ${editing.name}` : '新增发件账号'}
+        title={editing ? `编辑发件邮箱 · ${editing.fromEmail}` : '新增发件邮箱'}
         open={formOpen}
         onCancel={() => setFormOpen(false)}
         width={620}
@@ -657,15 +690,6 @@ export default function Channels() {
             </Form.Item>
           )}
 
-          <Form.Item
-            label="通道名称"
-            name="name"
-            rules={[{ required: true, message: '请起一个能区分用途的名字' }]}
-            extra="同一账号可建多条发信身份，仅用于区分用途；配额仍共享"
-          >
-            <Input placeholder="例如：主力-通知邮件" />
-          </Form.Item>
-
           <Space.Compact style={{ width: '100%' }}>
             <Form.Item
               label="SMTP 服务器"
@@ -687,7 +711,7 @@ export default function Channels() {
             label="SMTP 用户名"
             name="username"
             rules={[{ required: true, message: '请填写用户名' }]}
-            extra="同一服务器 + 用户名会被识别为同一个真实账号，共享配额与发送间隔"
+            extra="同一服务器 + 用户名会被识别为同一个真实账号，共享每日配额"
           >
             <Input placeholder="通常是完整邮箱地址" autoComplete="off" />
           </Form.Item>
@@ -696,7 +720,7 @@ export default function Channels() {
             label={editing ? '密码 / 授权码（留空表示不修改）' : '密码 / 授权码'}
             name="password"
             rules={editing ? [] : [{ required: true, message: '请填写密码或授权码' }]}
-            extra="QQ / 163 等必须用授权码，不是登录密码。存库前会用 AES-256-GCM 加密；修改密码会同步到同账号下所有通道"
+            extra="QQ / 163 等必须用授权码，不是登录密码。存库前会加密存储；修改密码会同步到同账号下所有发件邮箱"
           >
             <Input.Password placeholder={editing ? '留空则保持原密码' : '授权码'} autoComplete="new-password" />
           </Form.Item>
@@ -724,27 +748,19 @@ export default function Channels() {
               label="账号每日上限"
               name="dailyLimit"
               style={{ flex: 1, marginRight: 8 }}
-              extra="同一账号共享；修改会同步到该账号下所有通道"
+              extra="同一账号共享；修改会同步到该账号下所有发件邮箱"
             >
               <InputNumber min={1} max={100000} style={{ width: '100%' }} addonAfter="封/天" />
             </Form.Item>
-            <Form.Item
-              label="账号发送间隔"
-              name="minIntervalSec"
-              style={{ flex: 1, marginRight: 8 }}
-              extra="同一账号两封之间的最小间隔，修改会同步"
-            >
-              <InputNumber min={1} max={3600} style={{ width: '100%' }} addonAfter="秒" />
+            <Form.Item label="发件分组（可多选，任务按分组选号）" name="groupIds" style={{ flex: 1 }}>
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="不分组"
+                options={groups.map((g) => ({ value: g.id, label: g.name }))}
+              />
             </Form.Item>
-            <Form.Item label="发件分组（可多选，任务按分组选号）" name="groupIds">
-            <Select
-              mode="multiple"
-              allowClear
-              placeholder="不分组"
-              options={groups.map((g) => ({ value: g.id, label: g.name }))}
-            />
-          </Form.Item>
-          <Form.Item label="优先级" name="priority" style={{ width: 100 }}>
+            <Form.Item label="优先级" name="priority" style={{ width: 100 }}>
               <InputNumber min={0} max={100} style={{ width: '100%' }} />
             </Form.Item>
           </Space.Compact>
@@ -761,7 +777,7 @@ export default function Channels() {
         destroyOnClose
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-          将使用通道 <b>{testTarget?.channel.name}</b> 发一封测试信，会消耗该真实账号的 1 封共享配额。
+          将使用 <b>{testTarget?.channel.fromEmail}</b> 发一封测试信，会消耗该真实账号的 1 封共享配额。
         </Typography.Paragraph>
         <Input
           placeholder="收件地址"

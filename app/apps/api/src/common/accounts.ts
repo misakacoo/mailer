@@ -13,11 +13,10 @@ import { isSameCalendarDay } from './quota';
 
 export interface AccountChannel {
   id: number;
-  name: string;
+  fromEmail: string;
   host: string;
   username: string;
   dailyLimit: number;
-  minIntervalSec: number;
   sentToday: number;
   quotaDate: Date | null;
   lastSentAt: Date | null;
@@ -39,8 +38,6 @@ export interface AccountPool<T extends AccountChannel = AccountChannel> {
   /** 账号今日已发，等于该账号下所有通道 sent_today 之和。 */
   used: number;
   remaining: number;
-  /** 账号级最小发送间隔。同账号多条通道配置不一致时取最严格（最大）值。 */
-  minIntervalSec: number;
   /** 账号最近一次成功发送时间，取所有通道的最大值。 */
   lastSentAt: Date | null;
   /** active=至少一条通道可用；error=全部异常；paused=全部被手工停用 */
@@ -99,11 +96,6 @@ export function groupAccounts<T extends AccountChannel>(
       .filter((n) => Number.isFinite(n) && n > 0);
     const limit = limits.length > 0 ? Math.min(...limits) : 0;
 
-    const intervals = settingsSource
-      .map((c) => c.minIntervalSec)
-      .filter((n) => Number.isFinite(n) && n > 0);
-    const minIntervalSec = intervals.length > 0 ? Math.max(...intervals) : 1;
-
     const used = sorted.reduce(
       (sum, c) => sum + (isSameCalendarDay(c.quotaDate, day) ? Math.max(0, c.sentToday) : 0),
       0,
@@ -125,10 +117,9 @@ export function groupAccounts<T extends AccountChannel>(
       limit,
       used,
       remaining: Math.max(0, limit - used),
-      minIntervalSec,
       lastSentAt: latestDate(sorted.map((c) => c.lastSentAt)),
       status,
-      label: sorted.length > 1 ? `${primary.name} 等 ${sorted.length} 条` : primary.name,
+      label: sorted.length > 1 ? `${primary.fromEmail} 等 ${sorted.length} 条` : primary.fromEmail,
       channelCount: sorted.length,
       errorChannels: sorted.filter((c) => c.status === 'error').length,
       consecutiveFailures: Math.max(0, ...sorted.map((c) => c.consecutiveFailures ?? 0)),
