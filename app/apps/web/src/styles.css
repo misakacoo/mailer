@@ -52,8 +52,30 @@ h5 {
 .ant-drawer-content,
 .ant-dropdown,
 .ant-select-dropdown,
-.ant-popover-inner {
+.ant-popover-inner,
+.ant-notification-notice {
   border: 1px solid #e6e6e3;
+}
+
+/*
+ * 状态提示（message）也是白底，落在白色页面上几乎没有边界，
+ * 加描边后才看得出是一条浮起来的提示；颜色跟着语义走。
+ */
+.ant-message-notice-content {
+  border: 1px solid #e6e6e3;
+  background: #ffffff;
+}
+
+.ant-message-notice-content:has(.ant-message-success) {
+  border-color: rgba(22, 163, 74, 0.45);
+}
+
+.ant-message-notice-content:has(.ant-message-error) {
+  border-color: rgba(189, 44, 50, 0.45);
+}
+
+.ant-message-notice-content:has(.ant-message-warning) {
+  border-color: rgba(217, 119, 6, 0.45);
 }
 
 /* 输入类控件的聚焦态同样不能走阴影 */

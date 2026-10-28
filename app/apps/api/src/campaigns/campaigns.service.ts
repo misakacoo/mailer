@@ -2,25 +2,10 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { isRecurrence, nextOccurrence, RECURRENCE_LABEL, Recurrence } from '../common/recurrence';
 import { PrismaService } from '../common/prisma.service';
 import { CampaignRunnerService } from './campaign-runner.service';
-import {
-  CampaignVariantDto,
-  CreateCampaignDto,
-  QueryRecipientsDto,
-  UpdateCampaignDto,
-} from './dto/campaign.dto';
+import { CreateCampaignDto, QueryRecipientsDto, UpdateCampaignDto } from './dto/campaign.dto';
 
 /** 排期至少留出这么点余量，避免刚点完就被调度器当成"已过期" */
 const MIN_SCHEDULE_AHEAD_MS = 60_000;
-/** 变体样本低于这个数就不下结论，20 个人的打开率差 5 个点毫无意义 */
-const MIN_SAMPLE_FOR_WINNER = 10;
-
-interface NormalizedVariant {
-  label: string;
-  subject: string | null;
-  templateId: number | null;
-  weight: number;
-}
-
 @Injectable()
 export class CampaignsService {
   constructor(
@@ -32,10 +17,11 @@ export class CampaignsService {
     const rows = await this.prisma.campaign.findMany({
       where: includeDeleted ? { deletedAt: { not: null } } : { deletedAt: null },
       orderBy: { id: 'desc' },
-      include: { variants: { select: { label: true } } },
     });
+    // 只聚合这次返回的任务：以前是无条件全表 groupBy，明细上百万后每开一次列表都全表扫
     const stats = await this.prisma.recipient.groupBy({
       by: ['campaignId', 'status'],
+      where: { campaignId: { in: rows.map((r) => r.id) } },
       _count: { _all: true },
     });
 
@@ -53,6 +39,7 @@ export class CampaignsService {
       templateId: c.templateId,
       totalCount: c.totalCount,
       sendIntervalSec: c.sendIntervalSec,
+      sendIntervalMaxSec: c.sendIntervalMaxSec,
       channelGroupIds: c.channelGroupIds,
       scheduledAt: c.scheduledAt?.toISOString() ?? null,
       recurrence: c.recurrence,
@@ -60,7 +47,6 @@ export class CampaignsService {
       recurrenceUntil: c.recurrenceUntil?.toISOString() ?? null,
       seriesId: c.seriesId,
       deletedAt: c.deletedAt?.toISOString() ?? null,
-      variantLabels: c.variants.map((v) => v.label),
       createdAt: c.createdAt.toISOString(),
       startedAt: c.startedAt?.toISOString() ?? null,
       finishedAt: c.finishedAt?.toISOString() ?? null,
@@ -70,37 +56,13 @@ export class CampaignsService {
 
   async get(id: number) {
     const c = await this.getOrThrow(id);
-    const [template, grouped, variantGroups, openedGroups, clickedGroups, variants] = await Promise.all([
+    const [template, grouped] = await Promise.all([
       this.prisma.template.findUnique({ where: { id: c.templateId }, select: { id: true, name: true } }),
       this.prisma.recipient.groupBy({ by: ['status'], where: { campaignId: id }, _count: { _all: true } }),
-      // 变体维度要单独按 (variant, status) 分组：全局的 status 分组里没有 variant 字段
-      this.prisma.recipient.groupBy({
-        by: ['variant', 'status'],
-        where: { campaignId: id },
-        _count: { _all: true },
-      }),
-      this.prisma.recipient.groupBy({
-        by: ['variant'],
-        where: { campaignId: id, openedAt: { not: null } },
-        _count: { _all: true },
-      }),
-      this.prisma.recipient.groupBy({
-        by: ['variant'],
-        where: { campaignId: id, clickedAt: { not: null } },
-        _count: { _all: true },
-      }),
-      this.prisma.campaignVariant.findMany({ where: { campaignId: id }, orderBy: { label: 'asc' } }),
     ]);
 
     const counts: Record<string, number> = { queued: 0, sending: 0, sent: 0, failed: 0, suppressed: 0, canceled: 0 };
     for (const g of grouped) counts[g.status] = g._count._all;
-
-    const failures = await this.prisma.recipient.findMany({
-      where: { campaignId: id, status: 'failed' },
-      orderBy: { id: 'desc' },
-      take: 10,
-      select: { id: true, email: true, attempts: true, errorCode: true, errorMessage: true },
-    });
 
     const [openedCount, clickedCount] = await Promise.all([
       this.prisma.recipient.count({ where: { campaignId: id, openedAt: { not: null } } }),
@@ -135,23 +97,12 @@ export class CampaignsService {
       openRate: counts.sent > 0 ? Math.round((openedCount / counts.sent) * 1000) / 10 : 0,
       clickRate: counts.sent > 0 ? Math.round((clickedCount / counts.sent) * 1000) / 10 : 0,
       progress: c.totalCount > 0 ? Math.round((done / c.totalCount) * 100) : 0,
-      recentFailures: failures,
-      variantLabels: variants.map((v) => v.label),
-      variants: variants.map((v) => ({
-        label: v.label,
-        subject: v.subject,
-        templateId: v.templateId,
-        weight: v.weight,
-      })),
-      variantStats: this.buildVariantStats(variants, variantGroups, openedGroups, clickedGroups),
-      winnerLabel: this.pickWinner(variants, variantGroups, openedGroups),
     };
   }
 
   async create(dto: CreateCampaignDto) {
     this.assertInterval(dto.sendIntervalSec, dto.sendIntervalMaxSec);
     await this.assertRefs(dto.templateId, dto.listIds);
-    const variants = await this.normalizeVariants(dto.variants);
     const recurrence = this.parseRecurrence(dto);
 
     const created = await this.prisma.campaign.create({
@@ -172,7 +123,6 @@ export class CampaignsService {
               recurrenceUntil: recurrence.until,
             }
           : {}),
-        ...(variants.length > 0 ? { variants: { create: variants } } : {}),
       },
     });
 
@@ -191,7 +141,6 @@ export class CampaignsService {
     if (dto.templateId !== undefined || dto.listIds !== undefined) {
       await this.assertRefs(dto.templateId ?? c.templateId, dto.listIds ?? c.listIds);
     }
-    const variants = dto.variants === undefined ? null : await this.normalizeVariants(dto.variants);
     this.assertInterval(dto.sendIntervalSec, dto.sendIntervalMaxSec);
     const recurrenceData = this.recurrencePatch(dto);
 
@@ -209,16 +158,6 @@ export class CampaignsService {
           ...recurrenceData,
         },
       });
-      if (variants !== null) {
-        // 变体整体替换而不是逐条 diff：标签和权重互相牵连，
-        // 半套更新很容易出现"A 还是旧的 50、B 已经是新的 30"这种不成立的组合。
-        await tx.campaignVariant.deleteMany({ where: { campaignId: id } });
-        if (variants.length > 0) {
-          await tx.campaignVariant.createMany({
-            data: variants.map((v) => ({ ...v, campaignId: id })),
-          });
-        }
-      }
     });
     return { ok: true };
   }
@@ -321,7 +260,19 @@ export class CampaignsService {
     });
     if (claimed.count !== 1) throw new BadRequestException('任务状态已变化，请刷新后重试');
 
-    const result = await this.runner.materialize(id);
+    let result: Awaited<ReturnType<CampaignRunnerService['materialize']>>;
+    try {
+      result = await this.runner.materialize(id);
+    } catch (e) {
+      // 状态已经置成 running 但队列没铺开，若不回退，任务会永远显示"发送中 / 0%"，
+      // 而且因为"正在发送"连删都删不掉
+      await this.prisma.campaign.update({
+        where: { id },
+        data: { status: 'draft', startedAt: c.startedAt, finishedAt: null },
+      });
+      throw e;
+    }
+
     if (result.total === 0) {
       await this.prisma.campaign.update({
         where: { id },
@@ -353,14 +304,16 @@ export class CampaignsService {
     if (c.status === 'done' || c.status === 'canceled') {
       throw new BadRequestException('任务已经结束');
     }
-    await this.prisma.recipient.updateMany({
-      where: { campaignId: id, status: { in: ['queued', 'sending'] } },
-      data: { status: 'canceled' },
-    });
-    await this.prisma.campaign.update({
-      where: { id },
-      data: { status: 'canceled', finishedAt: new Date() },
-    });
+    await this.prisma.$transaction([
+      this.prisma.recipient.updateMany({
+        where: { campaignId: id, status: { in: ['queued', 'sending'] } },
+        data: { status: 'canceled', leaseUntil: null },
+      }),
+      this.prisma.campaign.update({
+        where: { id },
+        data: { status: 'canceled', finishedAt: new Date() },
+      }),
+    ]);
     return { ok: true };
   }
 
@@ -388,7 +341,6 @@ export class CampaignsService {
         id: r.id,
         email: r.email,
         status: r.status,
-        variant: r.variant,
         attempts: r.attempts,
         channelId: r.channelId,
         messageId: r.messageId,
@@ -401,101 +353,6 @@ export class CampaignsService {
   }
 
   // ---------- 内部方法 ----------
-
-  /** 每个变体的送达/打开/点击，用于判断哪一版更受欢迎 */
-  private buildVariantStats(
-    variants: { label: string; subject: string | null; weight: number }[],
-    statusGroups: { variant: string | null; status: string; _count: { _all: number } }[],
-    openedGroups: { variant: string | null; _count: { _all: number } }[],
-    clickedGroups: { variant: string | null; _count: { _all: number } }[],
-  ) {
-    if (variants.length === 0) return [];
-
-    const opened = new Map<string, number>();
-    openedGroups.forEach((g) => g.variant && opened.set(g.variant, g._count._all));
-    const clicked = new Map<string, number>();
-    clickedGroups.forEach((g) => g.variant && clicked.set(g.variant, g._count._all));
-
-    return variants.map((v) => {
-      const mine = statusGroups.filter((g) => g.variant === v.label);
-      const pick = (s: string) => mine.find((g) => g.status === s)?._count._all ?? 0;
-      const sent = pick('sent');
-      const o = opened.get(v.label) ?? 0;
-      const c = clicked.get(v.label) ?? 0;
-      return {
-        label: v.label,
-        subject: v.subject,
-        weight: v.weight,
-        total: mine.reduce((s, g) => s + g._count._all, 0),
-        sent,
-        failed: pick('failed'),
-        pending: pick('queued') + pick('sending'),
-        opened: o,
-        clicked: c,
-        openRate: sent > 0 ? Math.round((o / sent) * 1000) / 10 : 0,
-        clickRate: sent > 0 ? Math.round((c / sent) * 1000) / 10 : 0,
-      };
-    });
-  }
-
-  /**
-   * 挑一个"胜出"的变体。
-   * 样本不够时返回 null——20 封里差 2 个打开就是 10 个百分点，
-   * 这种结论拿去指导下一轮只会误导。
-   */
-  private pickWinner(
-    variants: { label: string }[],
-    statusGroups: { variant: string | null; status: string; _count: { _all: number } }[],
-    openedGroups: { variant: string | null; _count: { _all: number } }[],
-  ): string | null {
-    if (variants.length < 2) return null;
-    const sentBy = new Map<string, number>();
-    statusGroups
-      .filter((g) => g.status === 'sent' && g.variant)
-      .forEach((g) => sentBy.set(g.variant as string, g._count._all));
-    if (variants.some((v) => (sentBy.get(v.label) ?? 0) < MIN_SAMPLE_FOR_WINNER)) return null;
-
-    const openedBy = new Map<string, number>();
-    openedGroups.forEach((g) => g.variant && openedBy.set(g.variant, g._count._all));
-
-    let best: { label: string; rate: number } | null = null;
-    for (const v of variants) {
-      const sent = sentBy.get(v.label) ?? 0;
-      const rate = sent > 0 ? (openedBy.get(v.label) ?? 0) / sent : 0;
-      if (!best || rate > best.rate) best = { label: v.label, rate };
-    }
-    return best?.label ?? null;
-  }
-
-  /** 校验并补齐变体：标签唯一、权重有默认值、至少有一处和主模板不同 */
-  private async normalizeVariants(input?: CampaignVariantDto[]): Promise<NormalizedVariant[]> {
-    if (!input || input.length === 0) return [];
-    if (input.length === 1) {
-      throw new BadRequestException('A/B 测试至少需要两个变体，单变体请直接填任务模板');
-    }
-
-    const seen = new Set<string>();
-    const out: NormalizedVariant[] = [];
-    for (const v of input) {
-      const label = v.label.trim().toUpperCase();
-      if (seen.has(label)) throw new BadRequestException(`变体标签 ${label} 重复`);
-      seen.add(label);
-
-      const subject = v.subject?.trim() ? v.subject.trim() : null;
-      const templateId = v.templateId ?? null;
-      if (!subject && !templateId) {
-        throw new BadRequestException(`变体 ${label} 没有做任何改变，请至少改主题或换模板`);
-      }
-      out.push({ label, subject, templateId, weight: v.weight ?? 50 });
-    }
-
-    const templateIds = out.map((v) => v.templateId).filter((x): x is number => x !== null);
-    if (templateIds.length > 0) {
-      const found = await this.prisma.template.count({ where: { id: { in: templateIds } } });
-      if (found !== new Set(templateIds).size) throw new BadRequestException('变体引用的模板不存在');
-    }
-    return out;
-  }
 
   /**
    * 受众人数：分组里的联系人减去抑制名单。

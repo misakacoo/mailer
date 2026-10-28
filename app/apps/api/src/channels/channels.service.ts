@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import { Channel, Prisma } from '@prisma/client';
 import { APP_CONFIG, AppConfig } from '../common/config';
 import { encryptSecret } from '../common/crypto';
+import { assertOutboundHost } from '../common/net-guard';
 import { PrismaService } from '../common/prisma.service';
 import { BUSINESS_TZ, calendarDay, dayToDbDate, isSameCalendarDay } from '../common/quota';
 import {
@@ -59,6 +60,7 @@ export class ChannelsService {
   }
 
   async create(dto: CreateChannelDto): Promise<PublicChannel> {
+    await assertOutboundHost(dto.host, this.cfg.allowPrivateSmtp);
     const day = calendarDay();
     const created = await this.prisma.channel.create({
       data: {
@@ -85,7 +87,10 @@ export class ChannelsService {
 
     // 一条记录就是一个发件邮箱：改哪条只影响哪条，不再向"同账号其他记录"同步。
     const data: Prisma.ChannelUncheckedUpdateInput = {};
-    if (dto.host !== undefined) data.host = dto.host.trim();
+    if (dto.host !== undefined) {
+      await assertOutboundHost(dto.host, this.cfg.allowPrivateSmtp);
+      data.host = dto.host.trim();
+    }
     if (dto.port !== undefined) data.port = dto.port;
     if (dto.secure !== undefined) data.secure = dto.secure;
     if (dto.username !== undefined) data.username = dto.username.trim();
@@ -152,6 +157,7 @@ export class ChannelsService {
 
   /** 测试连接：返回诊断结果而不是抛错，前端直接展示原因 */
   async testConnection(dto: TestConnectionDto) {
+    if (dto.host) await assertOutboundHost(dto.host, this.cfg.allowPrivateSmtp);
     const cred = await this.resolveCredential(dto);
     const started = Date.now();
     const transporter = buildTransporter(cred);

@@ -56,23 +56,26 @@ export class TrackingService {
     if (!recipient || recipient.campaignId !== p.c) return null;
 
     const now = new Date();
-    await this.prisma.event.create({
-      data: {
-        campaignId: p.c,
-        recipientId: p.r,
-        contactId: p.k,
-        type: 'click',
-        url: p.u.slice(0, 2000),
-        ip,
-        userAgent: ua,
-      },
-    });
-
+    // 只在首次点击时落事件：公开端点没有限流，每点一次写一行会被刷爆表，
+    // 统计要的也只是"有没有点过"
     if (!recipient.clickedAt) {
-      await this.prisma.recipient.update({
-        where: { id: p.r },
-        data: { clickedAt: now, openedAt: recipient.openedAt ?? now },
-      });
+      await this.prisma.$transaction([
+        this.prisma.recipient.update({
+          where: { id: p.r },
+          data: { clickedAt: now, openedAt: recipient.openedAt ?? now },
+        }),
+        this.prisma.event.create({
+          data: {
+            campaignId: p.c,
+            recipientId: p.r,
+            contactId: p.k,
+            type: 'click',
+            url: p.u.slice(0, 2000),
+            ip,
+            userAgent: ua,
+          },
+        }),
+      ]);
     }
 
     return p.u;

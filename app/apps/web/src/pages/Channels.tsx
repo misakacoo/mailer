@@ -468,7 +468,7 @@ export default function Channels() {
     <div className="page">
       <PageHeader
         title="发件账号"
-        desc={`共 ${rows.length} 个发件邮箱，每个独立配置每日上限。左侧按分组筛选，任务里按分组选号`}
+        desc={`共 ${rows.length} 个发件邮箱`}
         extra={
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新增发件邮箱
@@ -477,9 +477,12 @@ export default function Channels() {
       />
 
       <Row gutter={metrics.gridGutter}>
-        <Col span={4}>
-          <Section title="分组">
-            <Card styles={{ body: { padding: 0 } }}>
+        <Col span={5}>
+          <Section title="分组" style={{ height: '100%' }}>
+            <Card
+              style={{ overflow: 'hidden' }}
+              styles={{ body: { padding: 0, height: '100%', overflow: 'auto' } }}
+            >
               {groupItems.map((item, i) => {
                 const active = groupFilter === item.key;
                 return (
@@ -592,10 +595,9 @@ export default function Channels() {
           </Section>
         </Col>
 
-        <Col span={20}>
+        <Col span={19}>
           <Section
             title={activeGroupName}
-            desc="每个发件邮箱独立计数，各自有每日上限；发送节奏由任务里的间隔设置决定"
             style={{ height: '100%' }}
           >
             <Card className="card-table" style={{ height: '100%' }}>
@@ -618,7 +620,7 @@ export default function Channels() {
         title={editing ? `编辑发件邮箱 · ${editing.fromEmail}` : '新增发件邮箱'}
         open={formOpen}
         onCancel={() => setFormOpen(false)}
-        width={620}
+        width={640}
         footer={[
           <Button key="test" icon={<ThunderboltOutlined />} loading={testing === 'new'} onClick={testFromForm}>
             保存前测试连接
@@ -637,85 +639,99 @@ export default function Channels() {
               <Select
                 options={presets.map((p) => ({ value: p.key, label: p.label }))}
                 onChange={onPresetChange}
-                placeholder="选择后自动填充服务器与端口"
+                placeholder="选择服务商"
               />
             </Form.Item>
           )}
 
-          <Space.Compact style={{ width: '100%' }}>
-            <Form.Item
-              label="SMTP 服务器"
-              name="host"
-              style={{ flex: 1, marginRight: 8 }}
-              rules={[{ required: true, message: '请填写服务器地址' }]}
-            >
-              <Input placeholder="smtp.example.com" />
-            </Form.Item>
-            <Form.Item label="端口" name="port" style={{ width: 110, marginRight: 8 }}>
-              <InputNumber min={1} max={65535} style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item label="SSL/TLS" name="secure" valuePropName="checked" style={{ width: 90 }}>
-              <Switch checkedChildren="是" unCheckedChildren="否" />
-            </Form.Item>
-          </Space.Compact>
+          <Row gutter={metrics.gridGutter}>
+            <Col span={16}>
+              <Form.Item
+                label="SMTP 服务器"
+                name="host"
+                rules={[{ required: true, message: '请填写服务器地址' }]}
+              >
+                <Input placeholder="smtp.example.com" />
+              </Form.Item>
+            </Col>
+            <Col span={4}>
+              <Form.Item label="端口" name="port">
+                <InputNumber min={1} max={65535} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={4}>
+              <Form.Item label="SSL/TLS" name="secure" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+            </Col>
+          </Row>
 
-          <Form.Item
-            label="SMTP 用户名"
-            name="username"
-            rules={[{ required: true, message: '请填写用户名' }]}
-            extra="用于 SMTP 登录，通常是完整邮箱地址"
-          >
-            <Input placeholder="通常是完整邮箱地址" autoComplete="off" />
-          </Form.Item>
+          <Row gutter={metrics.gridGutter}>
+            <Col span={12}>
+              <Form.Item
+                label="SMTP 用户名"
+                name="username"
+                rules={[{ required: true, message: '请填写用户名' }]}
+              >
+                <Input placeholder="通常是完整邮箱地址" autoComplete="off" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                label="密码 / 授权码"
+                name="password"
+                rules={editing ? [] : [{ required: true, message: '请填写密码或授权码' }]}
+              >
+                <Input.Password
+                  placeholder={editing ? '留空则不修改' : '授权码'}
+                  autoComplete="new-password"
+                />
+              </Form.Item>
+            </Col>
+          </Row>
 
-          <Form.Item
-            label={editing ? '密码 / 授权码（留空表示不修改）' : '密码 / 授权码'}
-            name="password"
-            rules={editing ? [] : [{ required: true, message: '请填写密码或授权码' }]}
-            extra="QQ / 163 等必须用授权码，不是登录密码。存库前会加密存储；修改密码会同步到同账号下所有发件邮箱"
-          >
-            <Input.Password placeholder={editing ? '留空则保持原密码' : '授权码'} autoComplete="new-password" />
-          </Form.Item>
+          <Row gutter={metrics.gridGutter}>
+            <Col span={12}>
+              <Form.Item label="发信人名称" name="fromName">
+                <Input placeholder="Mailer" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                label="发信地址"
+                name="fromEmail"
+                rules={[{ required: true, type: 'email', message: '请填写合法发信邮箱' }]}
+              >
+                <Input placeholder="noreply@example.com" />
+              </Form.Item>
+            </Col>
+          </Row>
 
-          <Space.Compact style={{ width: '100%' }}>
-            <Form.Item label="发信人名称" name="fromName" style={{ flex: 1, marginRight: 8 }}>
-              <Input placeholder="例如：XX 官方团队" />
-            </Form.Item>
-            <Form.Item
-              label="发信地址"
-              name="fromEmail"
-              style={{ flex: 1 }}
-              rules={[{ required: true, type: 'email', message: '请填写合法发信邮箱' }]}
-            >
-              <Input placeholder="noreply@example.com" />
-            </Form.Item>
-          </Space.Compact>
-
-          <Form.Item label="回复地址（可选）" name="replyTo" rules={[{ type: 'email', message: '邮箱格式不正确' }]}>
+          <Form.Item label="回复地址" name="replyTo" rules={[{ type: 'email', message: '邮箱格式不正确' }]}>
             <Input placeholder="user@example.com" />
           </Form.Item>
 
-          <Space.Compact style={{ width: '100%' }}>
-            <Form.Item
-              label="账号每日上限"
-              name="dailyLimit"
-              style={{ flex: 1, marginRight: 8 }}
-              extra="这个邮箱每天最多发多少封"
-            >
-              <InputNumber min={1} max={100000} style={{ width: '100%' }} addonAfter="封/天" />
-            </Form.Item>
-            <Form.Item label="发件分组（可多选，任务按分组选号）" name="groupIds" style={{ flex: 1 }}>
-              <Select
-                mode="multiple"
-                allowClear
-                placeholder="不分组"
-                options={groups.map((g) => ({ value: g.id, label: g.name }))}
-              />
-            </Form.Item>
-            <Form.Item label="优先级" name="priority" style={{ width: 100 }}>
-              <InputNumber min={0} max={100} style={{ width: '100%' }} />
-            </Form.Item>
-          </Space.Compact>
+          <Row gutter={metrics.gridGutter}>
+            <Col span={12}>
+              <Form.Item label="每日上限" name="dailyLimit">
+                <InputNumber min={1} max={100000} style={{ width: '100%' }} addonAfter="封/天" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="优先级" name="priority">
+                <InputNumber min={0} max={100} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item label="发件分组" name="groupIds" style={{ marginBottom: 0 }}>
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="不分组"
+              options={groups.map((g) => ({ value: g.id, label: g.name }))}
+            />
+          </Form.Item>
         </Form>
       </Modal>
 

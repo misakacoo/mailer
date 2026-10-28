@@ -112,6 +112,7 @@ export default function Settings() {
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [checkedAt, setCheckedAt] = useState<string | null>(null);
   const [clearOpen, setClearOpen] = useState(false);
+  const [clearPassword, setClearPassword] = useState('');
   const [clearScope, setClearScope] = useState<'all' | '90'>('90');
   const [clearing, setClearing] = useState(false);
 
@@ -156,12 +157,22 @@ export default function Settings() {
   }, []);
 
   const clearLogs = async () => {
+    if (!clearPassword.trim()) {
+      message.warning('请输入当前密码');
+      return;
+    }
     setClearing(true);
     try {
-      const qs = clearScope === 'all' ? '' : '?beforeDays=90';
-      const r = await api<{ deleted: number }>(`/ops/audit-logs${qs}`, { method: 'DELETE' });
+      // 后端要求明确的天数 + 当前密码：光有会话不能清日志
+      const qs = new URLSearchParams({
+        beforeDays: clearScope === 'all' ? '7' : '90',
+        currentPassword: clearPassword,
+      });
+      if (clearScope === 'all') qs.set('all', '1');
+      const r = await api<{ deleted: number }>(`/ops/audit-logs?${qs}`, { method: 'DELETE' });
       message.success(r.deleted > 0 ? `已清除 ${r.deleted} 条日志` : '没有符合条件的日志');
       setClearOpen(false);
+      setClearPassword('');
       setPage(1);
       await loadLogs(1, pageSize, keyword);
     } catch (e: any) {
@@ -267,7 +278,7 @@ export default function Settings() {
 
       <Row gutter={metrics.gridGutter} align="stretch">
         <Col span={14}>
-          <Section title="系统自检" desc="数据库、发送进程、磁盘、证书、备份与队列" style={{ height: '100%' }}>
+          <Section title="系统自检" style={{ height: '100%' }}>
             <Card style={{ height: '100%' }} styles={{ body: { padding: 0 } }}>
               {loadingCheck && checks.length === 0 ? (
                 <div style={{ padding: 56, textAlign: 'center' }}>
@@ -307,7 +318,7 @@ export default function Settings() {
         </Col>
 
         <Col span={10}>
-          <Section title="运行环境" desc="当前进程与站点配置" style={{ height: '100%' }}>
+          <Section title="运行环境" style={{ height: '100%' }}>
             <Card style={{ height: '100%' }}>
               {info ? (
                 <Descriptions column={1} size="small" colon={false} labelStyle={{ color: tokens.muted, width: 96 }}>
@@ -339,7 +350,6 @@ export default function Settings() {
 
       <Section
         title="操作日志"
-        desc="记录每一次写操作，用于回溯「谁在什么时候改了什么」"
         extra={
           <>
             <Input.Search
@@ -405,9 +415,17 @@ export default function Settings() {
         <Radio.Group value={clearScope} onChange={(e) => setClearScope(e.target.value)}>
           <Space direction="vertical">
             <Radio value="90">只清除 90 天前的日志</Radio>
-            <Radio value="all">全部清除</Radio>
+            <Radio value="all">清除 7 天前的日志（更早的一次性清掉）</Radio>
           </Space>
         </Radio.Group>
+
+        <Input.Password
+          style={{ marginTop: metrics.gridGutter }}
+          placeholder="当前密码"
+          autoComplete="current-password"
+          value={clearPassword}
+          onChange={(e) => setClearPassword(e.target.value)}
+        />
       </Modal>
     </div>
   );

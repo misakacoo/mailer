@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   DefaultValuePipe,
@@ -34,7 +35,8 @@ export class OpsController {
     @Query('action') action?: string,
   ) {
     return this.ops.auditLogs({
-      page: Math.max(page, 1),
+      // 上限 1 万页：再往后是纯 OFFSET 扫描，没有意义
+      page: Math.min(Math.max(page, 1), 10_000),
       pageSize: Math.min(Math.max(pageSize, 1), 200),
       action: action?.trim() || undefined,
     });
@@ -46,10 +48,19 @@ export class OpsController {
    * 清理动作本身会被审计拦截器记一条，所以"谁在什么时候清空了日志"仍留得住。
    */
   @Delete('audit-logs')
-  clearAuditLogs(@Query('beforeDays') beforeDays?: string) {
-    const days = beforeDays === undefined || beforeDays === '' ? undefined : Number(beforeDays);
+  clearAuditLogs(
+    @Query('beforeDays', new DefaultValuePipe(0), ParseIntPipe) beforeDays: number,
+    @Query('currentPassword') currentPassword: string,
+    @Query('all') all?: string,
+  ) {
+    // 参数必须是明确的正整数：以前传 abc 会被当成 undefined → 整表清空
+    if (!Number.isInteger(beforeDays) || beforeDays < 1) {
+      throw new BadRequestException('请指定要清理多少天之前的日志（beforeDays ≥ 1）');
+    }
     return this.ops.clearAuditLogs({
-      beforeDays: Number.isFinite(days as number) ? (days as number) : undefined,
+      beforeDays,
+      currentPassword,
+      all: all === '1' || all === 'true',
     });
   }
 

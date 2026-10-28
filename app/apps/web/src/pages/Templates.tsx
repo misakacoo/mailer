@@ -446,7 +446,6 @@ export default function Templates() {
     <div className="page">
       <PageHeader
         title="邮件模板"
-        desc="富文本与 HTML 源码双模式；变量会在发送时按收件人替换，并做 HTML 转义"
         note={
           recycleBin ? (
             <span style={{ fontSize: 12, color: tokens.warning }}>
@@ -470,7 +469,7 @@ export default function Templates() {
         }
       />
 
-      <Section title="模板列表" desc="模板被任务引用后不能彻底删除，避免历史投递对不上内容">
+      <Section title="模板列表">
         <Card className="card-table">
           <Table<TemplateRow>
             rowKey="id"

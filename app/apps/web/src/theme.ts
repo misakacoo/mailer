@@ -184,7 +184,7 @@ export const statusStyles: Record<string, { bg: string; fg: string; label: strin
   sending: { bg: tokens.primarySoft, fg: tokens.primary, label: '发送中' },
   sent: { bg: tokens.successSoft, fg: tokens.successDeep, label: '已送达' },
   failed: { bg: tokens.destructiveSoft, fg: tokens.destructiveDeep, label: '失败' },
-  suppressed: { bg: tokens.destructiveSoft, fg: tokens.destructiveDeep, label: '已抑制' },
+  suppressed: { bg: tokens.destructiveSoft, fg: tokens.destructiveDeep, label: '地址不存在' },
 
   active: { bg: tokens.successSoft, fg: tokens.successDeep, label: '正常' },
   error: { bg: tokens.destructiveSoft, fg: tokens.destructiveDeep, label: '异常' },

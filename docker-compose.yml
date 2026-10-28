@@ -32,7 +32,7 @@ services:
       DATABASE_URL: postgresql://mailer:${DB_PASSWORD}@postgres:5432/mailer
       APP_URL: ${APP_URL:?请在 .env 里设置 APP_URL}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       UPLOAD_DIR: /data/uploads
       TMP_DIR: /data/tmp
       # 容器内必须监听 0.0.0.0，否则端口映射进不来
@@ -68,7 +68,7 @@ services:
       DATABASE_URL: postgresql://mailer:${DB_PASSWORD}@postgres:5432/mailer
       APP_URL: ${APP_URL:?请在 .env 里设置 APP_URL}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       UPLOAD_DIR: /data/uploads
       TMP_DIR: /data/tmp
       HOST: 0.0.0.0

@@ -12,7 +12,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { api } from '../api';
+import { api, fetchMeCached, resetMeCache } from '../api';
 import { metrics, tokens } from '../theme';
 
 const { Header, Sider, Content } = Layout;
@@ -36,7 +36,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
 
   // 初始密码是 admin/admin，分发出去的系统如果不提醒，很多人会一直不改
   useEffect(() => {
-    api<{ mustChangePassword?: boolean }>('/auth/me')
+    fetchMeCached<{ mustChangePassword?: boolean }>()
       .then((r) => setMustChange(Boolean(r?.mustChangePassword)))
       .catch(() => undefined);
   }, []);
@@ -52,6 +52,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
     } catch {
       // 退出失败也回登录页，不能卡住
     }
+    resetMeCache();
     message.success('已退出');
     onLogout();
     nav('/login', { replace: true });

@@ -20,6 +20,8 @@ export interface AppConfig {
   backupDir: string | null;
   /** 站点证书路径，用于到期提醒。未配置则跳过该检查。 */
   tlsCertPath: string | null;
+  /** 允许 SMTP/IMAP 指向内网地址（只给本地调试用，生产保持 false） */
+  allowPrivateSmtp: boolean;
 }
 
 const REQUIRED = [
@@ -115,5 +117,6 @@ export function loadConfig(): AppConfig {
     defaultDailyLimit: int(process.env.DEFAULT_DAILY_LIMIT, 50),
     backupDir: process.env.BACKUP_DIR?.trim() || null,
     tlsCertPath: process.env.TLS_CERT_PATH?.trim() || null,
+    allowPrivateSmtp: process.env.ALLOW_PRIVATE_SMTP === '1',
   };
 }

@@ -15,18 +15,17 @@ export class HealthController {
     try {
       await this.prisma.$queryRaw`SELECT 1`;
       db = 'ok';
-    } catch (e: any) {
-      error = e?.message ?? String(e);
+    } catch {
+      // 具体错误只写日志：对外回显会暴露内网主机名、端口、驱动版本
+      error = 'database unavailable';
     }
 
     return {
       status: db === 'ok' ? 'ok' : 'degraded',
       db,
       dbLatencyMs: Date.now() - started,
-      uptimeSec: Math.round(process.uptime()),
-      node: process.version,
       time: new Date().toISOString(),
-      error,
+      ...(error ? { error } : {}),
     };
   }
 }

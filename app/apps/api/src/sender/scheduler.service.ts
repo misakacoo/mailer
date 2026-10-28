@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { CampaignVariant } from '@prisma/client';
 import { CampaignRunnerService } from '../campaigns/campaign-runner.service';
 import { log } from '../common/logger';
 import { PrismaService } from '../common/prisma.service';
@@ -61,7 +60,9 @@ export class SchedulerService {
           // 排期后分组里的人全都不可投递的极端情况：退回草稿并清掉时间，不要让它反复到点空跑
           await this.prisma.campaign.update({
             where: { id: c.id },
-            data: { status: 'draft', scheduledAt: null },
+            // 保留 scheduledAt：它是周期系列的时间锚点，清掉会让 spawnRecurring
+            // 以为"还没有下一轮"，同一时刻再生成一份
+            data: { status: 'draft' },
           });
           log.warn({ campaignId: c.id }, '定时任务到点但分组已无可发送联系人，已退回草稿');
           continue;
@@ -76,7 +77,7 @@ export class SchedulerService {
         await this.prisma.campaign
           .updateMany({
             where: { id: c.id, status: 'running' },
-            data: { status: 'draft', scheduledAt: null },
+            data: { status: 'draft' },
           })
           .catch(() => undefined);
         log.error({ campaignId: c.id, err: e?.message ?? String(e) }, '定时任务启动失败，已退回草稿');
@@ -97,7 +98,6 @@ export class SchedulerService {
   private async spawnRecurring(now: Date): Promise<void> {
     const finished = await this.prisma.campaign.findMany({
       where: { recurrence: { not: null }, status: 'done', deletedAt: null },
-      include: { variants: true },
       orderBy: [{ scheduledAt: 'desc' }, { id: 'desc' }],
       take: MAX_RECURRING_SCAN,
     });
@@ -139,25 +139,15 @@ export class SchedulerService {
             templateId: parent.templateId,
             listIds: parent.listIds,
             channelIds: parent.channelIds,
+            channelGroupIds: parent.channelGroupIds,
             sendIntervalSec: parent.sendIntervalSec,
+            sendIntervalMaxSec: parent.sendIntervalMaxSec,
             scheduledAt: nextAt,
             status: 'scheduled',
             recurrence: parent.recurrence,
             recurrenceInterval: parent.recurrenceInterval,
             recurrenceUntil: parent.recurrenceUntil,
             seriesId,
-            ...(parent.variants.length > 0
-              ? {
-                  variants: {
-                    create: parent.variants.map((v: CampaignVariant) => ({
-                      label: v.label,
-                      subject: v.subject,
-                      templateId: v.templateId,
-                      weight: v.weight,
-                    })),
-                  },
-                }
-              : {}),
           },
           select: { id: true },
         });
@@ -166,6 +156,12 @@ export class SchedulerService {
           '已生成下一轮周期任务',
         );
       } catch (e: any) {
+        // (seriesId, scheduledAt) 唯一索引兜底：两个 worker 同时判定"还没有下一轮"时，
+        // 后到的那条会撞 P2002，这不是故障，跳过即可
+        if (e?.code === 'P2002') {
+          log.info({ seriesId, scheduledAt: nextAt.toISOString() }, '下一轮已由其他进程生成，跳过');
+          continue;
+        }
         log.error({ seriesId, err: e?.message ?? String(e) }, '生成下一轮周期任务失败');
       }
     }

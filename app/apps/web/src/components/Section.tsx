@@ -29,9 +29,14 @@ export default function Section({
         style={{
           flex: '0 0 auto',
           display: 'flex',
-          alignItems: 'flex-start',
+          // 居中而不是顶对齐：右侧挂了按钮时，标题行不会因为按钮更高而把卡片顶下去，
+          // 左右两栏的卡片上边缘才能落在同一条线上
+          alignItems: 'center',
           justifyContent: 'space-between',
           gap: metrics.gridGutter,
+          // 与工具栏/小按钮的实际高度对齐：按钮 32、纯标题 21，
+          // 固定成 32 之后有没有 extra 的标题行高度都一致，左右两栏卡片才不会错开
+          minHeight: 32,
           marginBottom: metrics.snug,
         }}
       >

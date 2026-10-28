@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { App as AntApp, Button, Card, Col, Empty, Row, Spin, Tag, Tooltip } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
-import { api, Overview, TrendPoint } from '../api';
+import { api, fetchMeCached, Overview, TrendPoint } from '../api';
 import TrendChart from '../components/TrendChart';
 import Section from '../components/Section';
 import PageHeader from '../components/PageHeader';
@@ -146,7 +146,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     void load();
-    api<{ email: string }>('/auth/me')
+    fetchMeCached<{ email: string }>()
       .then(setMe)
       .catch(() => undefined);
 
@@ -251,7 +251,6 @@ export default function Dashboard() {
         <Col span={14}>
           <Section
             title="发件邮箱"
-            desc="每个邮箱独立配置与计数；停用或异常的不参与发送"
             style={{ height: '100%' }}
           >
             <Card style={{ height: '100%' }} styles={{ body: { padding: 0 } }}>
@@ -359,7 +358,7 @@ export default function Dashboard() {
         </Col>
 
         <Col span={10}>
-          <Section title="运行状况" desc="队列与联系人的当前状态" style={{ height: '100%' }}>
+          <Section title="运行状况" style={{ height: '100%' }}>
             <Card style={{ height: '100%' }}>
               <div style={{ fontSize: 12, color: tokens.muted, marginBottom: metrics.snug }}>队列</div>
               <Row gutter={metrics.gridGutter}>
@@ -403,7 +402,12 @@ export default function Dashboard() {
                   />
                 </Col>
                 <Col span={8}>
-                  <Stat label="抑制" value={d.totals.suppressed} hint="不再发送" />
+                  <Stat
+                    label="地址不存在"
+                    value={d.totals.undeliverable}
+                    hint="已停止发送"
+                    tone={d.totals.undeliverable > 0 ? 'destructive' : undefined}
+                  />
                 </Col>
               </Row>
 
@@ -439,7 +443,6 @@ export default function Dashboard() {
         <Col span={9}>
           <Section
             title={`近 ${d.rates.windowDays} 天效果`}
-            desc={`按 ${d.rates.settled} 封已出结果的邮件计算，排队中的不计入分母`}
             style={{ height: '100%' }}
           >
             <Card style={{ height: '100%' }}>
@@ -462,7 +465,7 @@ export default function Dashboard() {
         </Col>
 
         <Col span={15}>
-          <Section title="发送趋势（近 30 天）" desc="柱为每日发送量，折线为打开率" style={{ height: '100%' }}>
+          <Section title="发送趋势（近 30 天）" style={{ height: '100%' }}>
             <Card style={{ height: '100%' }} styles={{ body: { paddingTop: metrics.tight } }}>
               <TrendChart data={trend} height={230} />
             </Card>

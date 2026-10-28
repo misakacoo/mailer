@@ -14,6 +14,16 @@ async function bootstrap(): Promise<void> {
   app.useLogger(new PinoLoggerService());
   app.use(cookieParser());
   app.setGlobalPrefix('api');
+
+  // 基础安全响应头（不引 helmet，几个头足够）：
+  // 面板只返回 JSON，主要是防止浏览器把响应当成别的类型去嗅探/嵌入
+  app.use((_req: any, res: any, next: any) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    next();
+  });
   // 写操作全部留痕，避免逐处调用时漏记
   app.useGlobalInterceptors(app.get(AuditInterceptor));
   app.useGlobalPipes(

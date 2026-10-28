@@ -54,16 +54,26 @@ if [ -z "${ADMIN_EMAIL:-}" ]; then
   export ADMIN_EMAIL
 fi
 if [ -z "${ADMIN_PASSWORD_HASH:-}" ]; then
-  ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin}"
-  export ADMIN_PASSWORD
-  ADMIN_PASSWORD_HASH=$(node -e \
-    "process.stdout.write(require('/app/apps/api/node_modules/bcryptjs').hashSync(process.env.ADMIN_PASSWORD,10))")
-  export ADMIN_PASSWORD_HASH
-  # 还是默认密码就要求改：分发出的系统如果不提示，很多人会一直用 admin/admin
-  if [ "$ADMIN_PASSWORD" = "admin" ]; then
+  if [ -z "${ADMIN_PASSWORD:-}" ]; then
+    # 没有显式配置就随机生成：默认 admin/admin 会让公网上的面板直接可被接管
+    ADMIN_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
+    export ADMIN_PASSWORD
+    echo "[entrypoint] 已生成随机管理员密码（只打印这一次，请立刻保存并登录修改）："
+    echo "[entrypoint]   账号：${ADMIN_EMAIL}"
+    echo "[entrypoint]   密码：${ADMIN_PASSWORD}"
     ADMIN_FORCE_PASSWORD_CHANGE=1
     export ADMIN_FORCE_PASSWORD_CHANGE
   fi
+  ADMIN_PASSWORD_HASH=$(node -e \
+    "process.stdout.write(require('/app/apps/api/node_modules/bcryptjs').hashSync(process.env.ADMIN_PASSWORD,12))")
+  export ADMIN_PASSWORD_HASH
+  # 仍在用弱口令就强制改
+  case "$ADMIN_PASSWORD" in
+    admin|password|123456|admin123)
+      ADMIN_FORCE_PASSWORD_CHANGE=1
+      export ADMIN_FORCE_PASSWORD_CHANGE
+      ;;
+  esac
 fi
 
 # ---------- 3. 迁移 ----------

@@ -56,6 +56,10 @@ function mergeSamples(base: ImportSamples | null, add: ImportSamples): ImportSam
   };
 }
 
+/** 单次导入的行列上限：一张稀疏表可以把 !ref 声明到百万行，解析器会照着跑 */
+const MAX_IMPORT_ROWS = 200_000;
+const MAX_IMPORT_COLS = 100;
+
 @Injectable()
 export class ImportService {
   /**
@@ -70,12 +74,29 @@ export class ImportService {
     @Inject(APP_CONFIG) private readonly cfg: AppConfig,
   ) {}
 
+  /**
+   * 令牌校验。
+   *
+   * token 会被拼进文件路径，过去只判了非空，传 `../../x` 就能越出临时目录。
+   * 这里强制成 UUID（上传时是 randomUUID 生成的），并再确认拼出来的路径仍在 tmpDir 内。
+   */
+  private safeToken(token: string): string {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token)) {
+      throw new BadRequestException('导入令牌无效，请重新上传文件');
+    }
+    return token;
+  }
+
   private filePath(token: string) {
-    return join(this.cfg.tmpDir, `import-${token}.bin`);
+    const full = join(this.cfg.tmpDir, `import-${this.safeToken(token)}.bin`);
+    if (!full.startsWith(this.cfg.tmpDir)) throw new BadRequestException('导入令牌无效');
+    return full;
   }
 
   private metaPath(token: string) {
-    return join(this.cfg.tmpDir, `import-${token}.json`);
+    const full = join(this.cfg.tmpDir, `import-${this.safeToken(token)}.json`);
+    if (!full.startsWith(this.cfg.tmpDir)) throw new BadRequestException('导入令牌无效');
+    return full;
   }
 
   private async cleanupFiles(token: string) {
@@ -183,6 +204,12 @@ export class ImportService {
     }
 
     const table = parseTabular(buf, meta.originalName);
+    if (table.rows.length > MAX_IMPORT_ROWS) {
+      throw new BadRequestException(`单次导入最多 ${MAX_IMPORT_ROWS} 行，请拆分文件`);
+    }
+    if (table.columns.length > MAX_IMPORT_COLS) {
+      throw new BadRequestException(`文件列数过多（${table.columns.length} 列）`);
+    }
     if (mapping.emailColumn >= table.columns.length) {
       throw new BadRequestException('邮箱列超出文件列数，请重新选择');
     }
@@ -262,13 +289,21 @@ export class ImportService {
    * 而联系人/分组的写入全部带 skipDuplicates，重跑不会产生脏数据。
    */
   async tick(): Promise<boolean> {
-    // pending → running：由 worker 在场时认领，而不是创建时就置 running。
-    // 否则 worker 不在线时任务卡死在 pending；反过来 worker 一启动就自动接管。
-    const promoted = await this.prisma.importJob.updateMany({
-      where: { status: 'pending' },
-      data: { status: 'running' },
-    });
-    if (promoted.count > 0) log.info({ count: promoted.count }, '开始处理导入任务');
+    // 认领必须是原子的：以前"先把所有 pending 置 running，再 findFirst running"，
+    // 两个 worker 会同时拿到同一条任务、各自处理同一块并互相覆盖计数。
+    // 这里用条件更新 + SKIP LOCKED，抢到才算数。
+    const claimed = await this.prisma.$queryRaw<{ id: number }[]>`
+      UPDATE import_jobs SET status = 'running'
+      WHERE id = (
+        SELECT id FROM import_jobs
+        WHERE status = 'pending'
+        ORDER BY id
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+      )
+      RETURNING id
+    `;
+    if (claimed.length > 0) log.info({ jobId: claimed[0].id }, '开始处理导入任务');
 
     const job = await this.prisma.importJob.findFirst({
       where: { status: 'running' },

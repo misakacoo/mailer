@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { Spin } from 'antd';
 import Shell from './components/Shell';
-import { api } from './api';
+import { fetchMeCached, resetMeCache } from './api';
 import Channels from './pages/Channels';
 import Campaigns from './pages/Campaigns';
 import Contacts from './pages/Contacts';
@@ -19,9 +19,11 @@ export default function App() {
   const [state, setState] = useState<AuthState>('loading');
 
   useEffect(() => {
-    api('/auth/me')
+    // 只有 401 才算未登录：网络抖动/后端重启时把人踢回登录页，
+    // 会让人以为账号出了问题
+    fetchMeCached()
       .then(() => setState('in'))
-      .catch(() => setState('out'));
+      .catch((e: any) => setState(e?.status === 401 ? 'out' : 'in'));
   }, []);
 
   if (state === 'loading') {
@@ -36,7 +38,12 @@ export default function App() {
     <Routes>
       <Route
         path="/login"
-        element={state === 'in' ? <Navigate to="/" replace /> : <Login onDone={() => setState('in')} />}
+        element={state === 'in' ? <Navigate to="/" replace /> : <Login
+          onDone={() => {
+            resetMeCache();
+            setState('in');
+          }}
+        />}
       />
       <Route
         path="/"

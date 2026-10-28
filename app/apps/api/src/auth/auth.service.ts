@@ -17,9 +17,29 @@ export interface AccountInfo {
   updatedAt: string;
 }
 
-const BCRYPT_ROUNDS = 10;
-const MIN_PASSWORD = 6;
+const BCRYPT_ROUNDS = 12;
+const MIN_PASSWORD = 12;
 const ACCOUNT_RE = /^[A-Za-z0-9._@+-]{3,120}$/;
+/** bcrypt 只取前 72 字节，超长部分等于没设 */
+const MAX_PASSWORD_BYTES = 72;
+
+/** 常见弱口令：只拦最低成本的几个，不引入依赖 */
+const WEAK_PASSWORDS = new Set([
+  'password', 'password1', 'passw0rd', '123456', '123456789', '12345678',
+  'qwerty', 'qwerty123', 'abc123', 'admin', 'admin123', 'admin888', '111111', '000000',
+]);
+
+/**
+ * 登录失败限流（进程内）。
+ * 单实例部署够用；多实例时换成 Redis 或反向代理层的 limit_req。
+ */
+const LOGIN_WINDOW_MS = 5 * 60 * 1000;
+const LOGIN_MAX_FAILS = 5;
+const loginFails = new Map<string, { count: number; resetAt: number }>();
+
+function throttleKey(account: string, ip: string): string {
+  return `${account.trim().toLowerCase()}|${ip}`;
+}
 
 /**
  * 管理员账号。
@@ -57,7 +77,19 @@ export class AuthService {
     });
   }
 
-  async login(account: string, password: string): Promise<{ token: string; email: string }> {
+  async login(
+    account: string,
+    password: string,
+    ip = 'unknown',
+  ): Promise<{ token: string; email: string }> {
+    const key = throttleKey(account, ip);
+    const now = Date.now();
+    const hit = loginFails.get(key);
+    if (hit && hit.resetAt > now && hit.count >= LOGIN_MAX_FAILS) {
+      const waitSec = Math.ceil((hit.resetAt - now) / 1000);
+      throw new UnauthorizedException(`尝试次数过多，请 ${waitSec} 秒后再试`);
+    }
+
     const row = await this.ensureAccount();
     const accountOk = account.trim().toLowerCase() === row.email.trim().toLowerCase();
 
@@ -70,11 +102,27 @@ export class AuthService {
 
     // 账号与密码分开校验，但对外只给同一句错误，避免泄露"账号对不对"
     if (!accountOk || !passOk) {
+      const prev = hit && hit.resetAt > now ? hit : { count: 0, resetAt: now + LOGIN_WINDOW_MS };
+      loginFails.set(key, { count: prev.count + 1, resetAt: prev.resetAt });
       throw new UnauthorizedException('账号或密码不正确');
     }
 
-    const token = await this.jwt.signAsync({ sub: 'admin', email: row.email });
+    loginFails.delete(key);
+    const token = await this.jwt.signAsync({
+      sub: 'admin',
+      email: row.email,
+      tv: row.tokenVersion,
+    });
     return { token, email: row.email };
+  }
+
+  /** 登出：把会话版本 +1，旧 Cookie 立即作废（光删 Cookie 挡不住已经泄露的令牌） */
+  async logout(): Promise<void> {
+    await this.ensureAccount();
+    await this.prisma.adminAccount.update({
+      where: { id: 1 },
+      data: { tokenVersion: { increment: 1 } },
+    });
   }
 
   async accountInfo(): Promise<AccountInfo> {
@@ -95,7 +143,7 @@ export class AuthService {
     account?: string;
     newPassword?: string;
     currentPassword: string;
-  }): Promise<AccountInfo> {
+  }): Promise<AccountInfo & { token?: string }> {
     const row = await this.ensureAccount();
 
     const passOk = await bcrypt
@@ -114,13 +162,20 @@ export class AuthService {
     }
 
     if (input.newPassword) {
-      if (input.newPassword.length < MIN_PASSWORD) {
+      const pwd = input.newPassword;
+      if (pwd.length < MIN_PASSWORD) {
         throw new BadRequestException(`新密码至少 ${MIN_PASSWORD} 位`);
       }
-      if (input.newPassword === input.currentPassword) {
+      if (Buffer.byteLength(pwd, 'utf8') > MAX_PASSWORD_BYTES) {
+        throw new BadRequestException(`新密码不能超过 ${MAX_PASSWORD_BYTES} 字节（bcrypt 只认这么多）`);
+      }
+      if (WEAK_PASSWORDS.has(pwd.toLowerCase())) {
+        throw new BadRequestException('这个密码太常见了，换一个');
+      }
+      if (pwd === input.currentPassword) {
         throw new BadRequestException('新密码不能与当前密码相同');
       }
-      data.passwordHash = await bcrypt.hash(input.newPassword, BCRYPT_ROUNDS);
+      data.passwordHash = await bcrypt.hash(pwd, BCRYPT_ROUNDS);
       // 自己改过密码，就不再提示「仍在使用默认密码」
       data.mustChangePassword = false;
     }
@@ -129,11 +184,21 @@ export class AuthService {
       throw new BadRequestException('没有需要修改的内容');
     }
 
-    const updated = await this.prisma.adminAccount.update({ where: { id: 1 }, data });
+    // 改密码会让所有旧会话失效（tokenVersion +1），所以要把当前这把换成新签发的
+    const updated = await this.prisma.adminAccount.update({
+      where: { id: 1 },
+      data: data.passwordHash
+        ? { ...data, tokenVersion: { increment: 1 } }
+        : data,
+    });
+    const token = data.passwordHash
+      ? await this.jwt.signAsync({ sub: 'admin', email: updated.email, tv: updated.tokenVersion })
+      : undefined;
     return {
       account: updated.email,
       mustChangePassword: updated.mustChangePassword,
       updatedAt: updated.updatedAt.toISOString(),
+      ...(token ? { token } : {}),
     };
   }
 }

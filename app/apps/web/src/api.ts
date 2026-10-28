@@ -7,6 +7,23 @@ export interface ApiError extends Error {
  * - 会话失效（401）统一跳登录页，避免每个页面各写一遍
  * - 非 2xx 抛出带后端 message 的错误，直接可展示
  */
+/** /auth/me 在首屏会被三处调用，这里合并成一次，避免开面板就发三个相同请求 */
+let meInFlight: Promise<unknown> | null = null;
+export function fetchMeCached<T = unknown>(): Promise<T> {
+  if (!meInFlight) {
+    meInFlight = api<T>('/auth/me').catch((e) => {
+      meInFlight = null;
+      throw e;
+    });
+  }
+  return meInFlight as Promise<T>;
+}
+
+/** 登录状态变化时清掉缓存（登录、登出、改密后都要调） */
+export function resetMeCache(): void {
+  meInFlight = null;
+}
+
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     credentials: 'same-origin',
@@ -18,10 +35,20 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
   });
 
   if (res.status === 401) {
-    if (window.location.pathname !== '/login') {
+    // 登录接口自己的 401 是"账号或密码不对"，不能当成会话失效去跳转，
+    // 否则用户看到的是"未登录"而不是真正的失败原因
+    const isLoginCall = path.startsWith('/auth/login');
+    if (!isLoginCall && window.location.pathname !== '/login') {
       window.location.replace('/login');
     }
-    const err: ApiError = new Error('未登录');
+    let msg = '未登录';
+    try {
+      const body = await res.clone().json();
+      if (body?.message) msg = body.message;
+    } catch {
+      // 忽略：响应不是 JSON 就用默认文案
+    }
+    const err: ApiError = new Error(msg);
     err.status = 401;
     throw err;
   }
@@ -80,8 +107,8 @@ export interface Overview {
   totals: {
     contacts: number;
     reachable: number;
-    bouncedContacts: number;
-    suppressed: number;
+    /** 地址不存在（硬退信被拉黑）的联系人数 */
+    undeliverable: number;
     campaigns: number;
     activeCampaigns: number;
     doneCampaigns: number;

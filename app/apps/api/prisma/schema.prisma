@@ -7,6 +7,8 @@ model AdminAccount {
   passwordHash       String   @map("password_hash")
   /// 仍在用初始默认密码时为 true，面板顶部据此提示尽快修改
   mustChangePassword Boolean  @default(false) @map("must_change_password")
+  /// 会话版本：改密/登出时 +1，旧 JWT 立即失效
+  tokenVersion       Int      @default(0) @map("token_version")
   updatedAt          DateTime @updatedAt @map("updated_at")
 
   @@map("admin_account")
@@ -86,7 +88,6 @@ model Contact {
   recipients  Recipient[]
   events      Event[]
 
-  @@index([createdAt])
   @@map("contacts")
 }
 
@@ -95,6 +96,8 @@ model List {
   id          Int          @id @default(autoincrement())
   name        String
   description String?
+  /// 系统内置分组的固定标识，不允许删除；目前只有 undeliverable（地址不存在）
+  systemKey   String?      @unique @map("system_key")
   createdAt   DateTime     @default(now()) @map("created_at")
   updatedAt   DateTime     @updatedAt @map("updated_at")
 
@@ -171,45 +174,25 @@ model Campaign {
 
   template   Template          @relation(fields: [templateId], references: [id])
   recipients Recipient[]
-  variants   CampaignVariant[]
 
   @@index([status])
   @@index([status, scheduledAt])
   @@index([seriesId])
+  /// 同一系列的同一时刻只能有一轮，兜住多 worker 的 count-then-create 竞态
+  @@unique([seriesId, scheduledAt])
   @@index([deletedAt])
   @@map("campaigns")
-}
-
-/// A/B 变体：同一个任务里可以有几套主题/模板，按权重分给收件人
-model CampaignVariant {
-  id         Int      @id @default(autoincrement())
-  campaignId Int      @map("campaign_id")
-  /// 展示用的短标签 A / B / C
-  label      String
-  /// 覆盖任务默认主题；为空则用模板自身主题
-  subject    String?
-  /// 覆盖任务默认模板；为空则用任务模板
-  templateId Int?     @map("template_id")
-  /// 分流权重，按同组内归一化处理，不必凑成 100
-  weight     Int      @default(50)
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-
-  @@unique([campaignId, label])
-  @@map("campaign_variants")
 }
 
 /// 投递明细：一封邮件一行，同时充当发送队列
 model Recipient {
   id            Int       @id @default(autoincrement())
   campaignId    Int       @map("campaign_id")
-  contactId     Int       @map("contact_id")
+  /// 联系人被删后置空，投递历史必须留下（这是账单与合规记录）
+  contactId     Int?      @map("contact_id")
   email         String // 发送时的快照，联系人被删也不影响历史
   channelId     Int?      @map("channel_id")
   status        String    @default("queued") // queued | sending | sent | failed | suppressed
-  /// A/B 变体标签（A/B/C）；未启用 A/B 的任务为空。发信时据此覆盖主题与模板。
-  variant       String?
   attempts      Int       @default(0)
   nextAttemptAt DateTime  @default(now()) @map("next_attempt_at")
   messageId     String?   @map("message_id")
@@ -218,17 +201,22 @@ model Recipient {
   sentAt        DateTime? @map("sent_at")
   openedAt      DateTime? @map("opened_at")
   clickedAt     DateTime? @map("clicked_at")
+  /// 发送租约：取件时写入，到期未完成才允许回收，避免把正在发的信当僵尸重投
+  leaseUntil    DateTime? @map("lease_until")
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
   campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  contact  Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contact  Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
   channel  Channel? @relation(fields: [channelId], references: [id])
 
   @@unique([campaignId, contactId])
   @@index([status, nextAttemptAt])
   @@index([campaignId, status])
-  @@index([campaignId, variant])
+  @@index([sentAt])
+  @@index([openedAt])
+  @@index([clickedAt])
+  @@index([status, updatedAt])
   @@map("recipients")
 }
 
@@ -237,28 +225,28 @@ model Event {
   id          Int      @id @default(autoincrement())
   campaignId  Int      @map("campaign_id")
   recipientId Int      @map("recipient_id")
-  contactId   Int      @map("contact_id")
+  contactId   Int?     @map("contact_id")
   type        String // open | click | bounce | complaint
   url         String?
   ip          String?
   userAgent   String?  @map("user_agent")
   createdAt   DateTime @default(now()) @map("created_at")
 
-  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contact Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
   @@index([campaignId, type])
   @@index([contactId, type])
+  @@index([createdAt])
   @@map("events")
 }
 
-/// 抑制名单：退信、投诉、退订、手工拉黑的地址永不再发
+/// 抑制名单：硬退信（地址不存在）的地址永不再发；对应联系人会被移进「地址不存在」分组
 model Suppression {
   email     String   @id
-  reason    String   @default("manual") // bounce | complaint | unsub | manual
+  reason    String   @default("manual") // bounce | manual
   note      String?
   createdAt DateTime @default(now()) @map("created_at")
 
-  @@index([reason])
   @@map("suppressions")
 }
 
@@ -276,6 +264,21 @@ model Attachment {
 
 /// 系统运行状态：worker 心跳、上次备份时间等
 /// 不复用 audit_logs，因为心跳每 30 秒一条会把真正的审计记录淹没。
+/// 已解析过的退信邮件。IMAP 的「标记已读」在连接抖动时会失败，
+/// 只靠 \Seen 去重会导致同一封 DSN 每轮被重复解析、重复写抑制名单。
+model BounceSeen {
+  id          Int      @id @default(autoincrement())
+  channelId   Int      @map("channel_id")
+  /// INBOX 的 UIDVALIDITY，邮箱重建后旧的 uid 会失效，必须一起作为键
+  uidValidity BigInt   @map("uid_validity")
+  uid         Int
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([channelId, uidValidity, uid])
+  @@index([createdAt])
+  @@map("bounce_seen")
+}
+
 model SystemState {
   key       String   @id
   value     String

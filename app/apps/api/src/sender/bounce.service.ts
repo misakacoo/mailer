@@ -4,12 +4,17 @@ import { APP_CONFIG, AppConfig } from '../common/config';
 import { log } from '../common/logger';
 import { PrismaService } from '../common/prisma.service';
 import { credentialFromChannel } from '../common/smtp';
+import { isAddressMissing } from '../common/address-missing';
+import { ListsService } from '../lists/lists.service';
 
 interface BounceHit {
   email: string;
   status: string;
   diagnostic: string;
 }
+
+/** 只回看最近这么多天的退信，避免把整箱历史未读全拉下来解析 */
+const LOOKBACK_DAYS = 30;
 
 /** IMAP 的很多调用在连接异常时不会 resolve，必须加超时，否则会把事件循环挂死 */
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | void> {
@@ -37,6 +42,7 @@ export class BounceService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(APP_CONFIG) private readonly cfg: AppConfig,
+    private readonly lists: ListsService,
   ) {}
 
   /** 从 smtp.xxx.com 推导 imap.xxx.com，推导不出来就跳过这条通道 */
@@ -85,7 +91,20 @@ export class BounceService {
           const mailbox = client.mailbox;
           if (!mailbox || typeof mailbox === 'boolean') continue;
 
-          for await (const msg of client.fetch({ seen: false }, { source: true, uid: true })) {
+          const uidValidity = mailbox.uidValidity ?? 0n;
+          // 去重表：Hostinger 这类 IMAP 在连续操作后容易 socket 超时，
+          // 「标记已读」一旦失败，只靠 \Seen 搜索就会每轮把同一批 DSN 重跑一遍。
+          const seenRows = await this.prisma.bounceSeen.findMany({
+            where: { channelId: channel.id, uidValidity },
+            select: { uid: true },
+          });
+          const seen = new Set(seenRows.map((r) => r.uid));
+          const handled: number[] = [];
+          // 只回看 30 天，避免把整箱历史未读都拉下来解析
+          const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+
+          for await (const msg of client.fetch({ seen: false, since }, { source: true, uid: true })) {
+            if (seen.has(msg.uid)) continue;
             const source = msg.source?.toString('utf8') ?? '';
             const hits = this.parseDsn(source);
             if (hits.length === 0) continue;
@@ -96,14 +115,19 @@ export class BounceService {
               const ok = await this.markBounced(hit, channel.id);
               if (ok) suppressed++;
             }
+            handled.push(msg.uid);
+          }
 
-            // 确认是退信再标记已读，避免动到真实往来邮件
-            // 注意：range 必须传 uid 字符串 + {uid:true}，传对象形式会被当成搜索条件而静默失效，
-            // 结果就是同一封退信每轮都被重复处理
+          if (handled.length > 0) {
+            // 批量标记，一次往返而不是每封一次；失败也不影响去重表兜底
             await withTimeout(
-              client.messageFlagsAdd(String(msg.uid), ['\\Seen'], { uid: true }),
-              5000,
+              client.messageFlagsAdd(handled.join(','), ['\\Seen'], { uid: true }),
+              10000,
             );
+            await this.prisma.bounceSeen.createMany({
+              data: handled.map((uid) => ({ channelId: channel.id, uidValidity, uid })),
+              skipDuplicates: true,
+            });
           }
         } finally {
           lock.release();
@@ -124,6 +148,14 @@ export class BounceService {
     }
 
     if (processed > 0) log.info({ processed, suppressed }, '退信解析完成');
+
+    // 去重记录只保留与回看窗口同样长的时间，过期即清
+    await this.prisma.bounceSeen
+      .deleteMany({
+        where: { createdAt: { lt: new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000) } },
+      })
+      .catch(() => undefined);
+
     return { channels: channels.length, processed, suppressed, errors };
   }
 
@@ -163,8 +195,10 @@ export class BounceService {
    * - 地址写入抑制名单（永久，不再发送）
    */
   private async markBounced(hit: BounceHit, channelId: number): Promise<boolean> {
+    // 退信是从这个通道的收件箱里拿到的，只该影响这个通道发出去的那一次投递。
+    // 不加 channelId 会误伤同一地址在别的通道/任务里的正常投递。
     const recipient = await this.prisma.recipient.findFirst({
-      where: { email: hit.email, status: 'sent' },
+      where: { email: hit.email, status: 'sent', channelId },
       orderBy: { id: 'desc' },
     });
 
@@ -197,6 +231,13 @@ export class BounceService {
       .catch(() => undefined);
 
     log.warn({ email: hit.email, status: hit.status, channelId }, '已处理退信并加入抑制名单');
+
+    // 只把"地址不存在"这类挪进分组：策略拒收、邮箱已满的地址本身是有效的
+    if (isAddressMissing(hit.diagnostic)) {
+      await this.lists.moveToUndeliverable(hit.email).catch((e) => {
+        log.warn({ email: hit.email, err: String(e) }, '移入「地址不存在」分组失败');
+      });
+    }
     return true;
   }
 

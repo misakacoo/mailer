@@ -352,7 +352,7 @@ export default function ImportWizard({
               description={
                 <ul style={{ margin: 0, paddingLeft: 18 }}>
                   <li>邮箱统一转小写并去空格；格式非法的行会被跳过并计数</li>
-                  <li>库里已存在的联系人不会重复创建，但会补进所选分组；抑制名单里的地址直接跳过</li>
+                  <li>库里已存在的联系人不会重复创建，但会补进所选分组；地址不存在（硬退信）的地址直接跳过</li>
                   <li>大文件在后台分批导入，期间可以暂停、继续或取消，关掉窗口任务照常进行</li>
                   <li>除邮箱和姓名外的列会成为联系人的自定义字段</li>
                 </ul>
@@ -489,7 +489,7 @@ export default function ImportWizard({
             <Statistic title="加入分组" value={job.addedToList} />
             <Statistic title="格式非法" value={job.invalid} valueStyle={{ color: tokens.destructive }} />
             <Statistic title="文件内重复" value={job.duplicateInFile} />
-            <Statistic title="已抑制" value={job.suppressed} />
+            <Statistic title="地址不存在" value={job.suppressed} />
             <Statistic title="空行" value={job.empty} />
           </Space>
 
@@ -498,7 +498,7 @@ export default function ImportWizard({
               type="info"
               showIcon
               message={`共读取 ${job.totalRows.toLocaleString()} 行，成功导入 ${job.imported.toLocaleString()} 条新联系人`}
-              description="库里已存在的联系人不会重复创建，但已补进所选分组；抑制名单中的地址始终跳过。"
+              description="库里已存在的联系人不会重复创建，但已补进所选分组；地址不存在（硬退信）的地址始终跳过。"
             />
           )}
 
@@ -520,7 +520,7 @@ export default function ImportWizard({
               )}
               {job.samples.suppressed.length > 0 && (
                 <p style={{ marginBottom: 0 }}>
-                  <b>已抑制样本：</b>
+                  <b>地址不存在样本：</b>
                   <span className="mono">{job.samples.suppressed.join('，')}</span>
                 </p>
               )}

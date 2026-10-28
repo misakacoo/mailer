@@ -27,4 +27,10 @@ export class ListsController {
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.lists.remove(id);
   }
+
+  /** 清空分组：删掉组内联系人，分组本身保留 */
+  @Post(':id/clear')
+  clear(@Param('id', ParseIntPipe) id: number) {
+    return this.lists.clear(id);
+  }
 }

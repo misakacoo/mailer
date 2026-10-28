@@ -33,6 +33,8 @@ export class AuditInterceptor implements NestInterceptor {
         path: url,
         status: statusCode,
         elapsedMs: Date.now() - started,
+        // 单管理员也记上操作者：将来加人或多账号时日志才有归属
+        actor: (req as any).user?.email ?? (req as any).user?.sub ?? null,
       };
       if (error) detail.error = error.slice(0, 500);
       // 审计写入失败绝不能影响业务响应，所以只记日志
@@ -92,6 +94,10 @@ export class AuditInterceptor implements NestInterceptor {
   }
 
   private clientIp(req: any): string | null {
+    // 用 Express 按 trust proxy 白名单算出来的 req.ip，不直接读原始请求头，
+    // 否则任何客户端加一行 X-Forwarded-For 就能伪造审计来源
+    const direct = typeof req.ip === 'string' ? req.ip : null;
+    if (direct) return direct.replace(/^::ffff:/, '').slice(0, 64);
     const xf = req.headers?.['x-forwarded-for'];
     if (typeof xf === 'string' && xf.length > 0) return xf.split(',')[0].trim().slice(0, 64);
     return (req.ip ?? req.socket?.remoteAddress ?? null) as string | null;

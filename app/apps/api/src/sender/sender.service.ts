@@ -7,6 +7,8 @@ import { MailService, OutgoingAttachment } from '../mail/mail.service';
 import { buildVars, htmlToText, renderHtml, renderSubject, renderTextBody } from '../templates/render';
 import { TrackingService } from '../tracking/tracking.service';
 import { log } from '../common/logger';
+import { isAddressMissing } from '../common/address-missing';
+import { ListsService } from '../lists/lists.service';
 import { isSameCalendarDay } from '../common/quota';
 
 /** 4xx 临时失败的重试间隔：1 分钟 / 5 分钟 / 30 分钟 */
@@ -17,21 +19,19 @@ const MAX_RETRIES = 3;
 const IDLE_WAIT_MS = 3000;
 const NO_CHANNEL_WAIT_MS = 10000;
 const MAX_SLEEP_MS = 20000;
-/**
- * sending 状态超过这个时间没更新，视为进程崩溃遗留。
- * 必须大于 SMTP 会话的最长耗时（socketTimeout 30s），否则会把正在发的信当成僵尸回收，
- * 造成重复投递。代价是崩溃时那封信最多卡 2 分钟才被回收——这是 at-least-once 的必然取舍。
- */
-const STALE_SENDING_MS = 2 * 60 * 1000;
+/** 发送租约：取件时写入，到期未完成才允许回收。比"按 updatedAt 盲扫"安全得多 */
+const LEASE_MS = 5 * 60 * 1000;
+/** 老数据可能没有 lease_until，仍按这个时间兜底判断 */
+const STALE_SENDING_MS = 10 * 60 * 1000;
 
 export interface ClaimedRow {
   id: number;
   campaign_id: number;
-  contact_id: number;
+  /** 联系人可能已被删除（历史明细仍然要能继续发/落失败） */
+  contact_id: number | null;
   email: string;
   attempts: number;
   /** A/B 变体标签，未启用 A/B 的任务为空 */
-  variant: string | null;
 }
 
 export type TickAction = 'sent' | 'retry' | 'failed' | 'idle' | 'no-channel' | 'halted';
@@ -60,6 +60,7 @@ export class SenderService {
     private readonly prisma: PrismaService,
     private readonly mail: MailService,
     private readonly tracking: TrackingService,
+    private readonly lists: ListsService,
     @Inject(APP_CONFIG) private readonly cfg: AppConfig,
   ) {}
 
@@ -76,10 +77,15 @@ export class SenderService {
    * 否则这些收件人永远不会再被取到。
    */
   async recoverStale(): Promise<number> {
+    const now = new Date();
     const cutoff = new Date(Date.now() - STALE_SENDING_MS);
     const res = await this.prisma.recipient.updateMany({
-      where: { status: 'sending', updatedAt: { lt: cutoff } },
-      data: { status: 'queued', nextAttemptAt: new Date() },
+      where: {
+        status: 'sending',
+        // 有租约按租约判，没有租约的老行退回按时间戳判
+        OR: [{ leaseUntil: { lt: now } }, { leaseUntil: null, updatedAt: { lt: cutoff } }],
+      },
+      data: { status: 'queued', nextAttemptAt: now, leaseUntil: null },
     });
     return res.count;
   }
@@ -99,7 +105,7 @@ export class SenderService {
     }
 
     // A/B 变体只覆盖主题或模板，追踪开关、附件等仍以最终选中的那份模板为准
-    const { template, subjectTemplate } = await this.resolveTemplate(campaign, claimed.variant);
+    const { template, subjectTemplate } = await this.resolveTemplate(campaign);
     if (!template) {
       await this.failPermanently(claimed, '模板不存在', 'TEMPLATE_MISSING');
       await this.finishIfDone(campaign.id);
@@ -121,27 +127,42 @@ export class SenderService {
     }
 
     const channel = selection.channel;
-    const contact = await this.prisma.contact.findUnique({ where: { id: claimed.contact_id } });
+    const contact = claimed.contact_id
+      ? await this.prisma.contact.findUnique({ where: { id: claimed.contact_id } })
+      : null;
     const vars = buildVars(contact);
     const subject = renderSubject(subjectTemplate, vars);
 
-    // 追踪与退订：令牌里带 campaign / recipient / contact，点击目标 URL 也一起签名
-    const payload = { c: campaign.id, r: claimed.id, k: claimed.contact_id };
-    const html = renderHtml(template.html, vars, {
-      rewriteLink: template.trackClick ? (url) => this.tracking.clickUrl(payload, url) : undefined,
-      openPixelUrl: template.trackOpen ? this.tracking.pixelUrl(payload) : undefined,
-    });
-    const text = template.text?.trim() ? renderTextBody(template.text, vars) : htmlToText(html);
-    const attachments = await this.loadAttachments(template);
+    let result: Awaited<ReturnType<MailService['send']>>;
+    try {
+      // 追踪与退订：令牌里带 campaign / recipient / contact，点击目标 URL 也一起签名
+      const payload = { c: campaign.id, r: claimed.id, k: claimed.contact_id ?? 0 };
+      const html = renderHtml(template.html, vars, {
+        rewriteLink: template.trackClick ? (url) => this.tracking.clickUrl(payload, url) : undefined,
+        openPixelUrl: template.trackOpen ? this.tracking.pixelUrl(payload) : undefined,
+      });
+      const text = template.text?.trim() ? renderTextBody(template.text, vars) : htmlToText(html);
+      const attachments = await this.loadAttachments(template);
 
-
-    const result = await this.mail.send(channel.id, {
-      to: claimed.email,
-      subject,
-      html,
-      text,
-      attachments,
-    });
+      result = await this.mail.send(channel.id, {
+        to: claimed.email,
+        subject,
+        html,
+        text,
+        attachments,
+      });
+    } catch (e: any) {
+      // 渲染、附件读取、凭据解密都会在这里抛。以前没有这层 try，
+      // 一旦抛出这一行就永远卡在 sending、attempts 也不增加，任务无限空转。
+      await this.recordSendException(claimed, campaign.id, e);
+      return {
+        action: 'retry',
+        waitMs: Math.max(1000, this.computeWait(campaign)),
+        campaignId: campaign.id,
+        email: claimed.email,
+        detail: e?.message ?? String(e),
+      };
+    }
 
     if (result.ok) {
       await this.prisma.recipient.update({
@@ -153,6 +174,7 @@ export class SenderService {
           messageId: result.messageId ?? null,
           errorCode: null,
           errorMessage: null,
+          leaseUntil: null,
         },
       });
       this.lastSendByCampaign.set(campaign.id, Date.now());
@@ -171,14 +193,34 @@ export class SenderService {
       };
     }
 
-    // —— 失败处理：5xx 直接判死，绝不重试 ——
+    if (!result.ok && result.code === 'QUOTA_EXCEEDED') {
+      // 选通道时还有额度、真正扣减时被别人抢先了。这条要放回队列等明天，
+      // 按临时失败处理会把重试次数白白烧光。
+      await this.release(claimed.id, 60_000);
+      return { action: 'no-channel', waitMs: 60_000, campaignId: campaign.id };
+    }
+
+    // —— 失败处理：5xx 是永久性的，不再重试；但只有"地址不存在"才拉黑 ——
     const permanent = result.responseCode !== undefined && result.responseCode >= 500;
     if (permanent) {
-      await this.failPermanently(claimed, result.message, `SMTP_${result.responseCode}`);
-      log.warn(
-        { recipientId: claimed.id, email: claimed.email, code: result.responseCode },
-        '永久退信，已加入抑制名单',
-      );
+      const missing = isAddressMissing(result.message);
+      if (missing) {
+        await this.failPermanently(claimed, result.message, `SMTP_${result.responseCode}`);
+        log.warn(
+          { recipientId: claimed.id, email: claimed.email, code: result.responseCode },
+          '地址不存在，已加入抑制名单',
+        );
+        await this.lists.moveToUndeliverable(claimed.email).catch((e) => {
+          log.warn({ email: claimed.email, err: String(e) }, '移入「地址不存在」分组失败');
+        });
+      } else {
+        // 535 认证失败、552 邮箱已满、554 策略拒收：地址本身有效，拉黑会误伤真实收件人
+        await this.markFailed(claimed, `SMTP_${result.responseCode}`, result.message);
+        log.warn(
+          { recipientId: claimed.id, code: result.responseCode, message: result.message },
+          '通道或策略拒收，本条判失败但地址不拉黑',
+        );
+      }
       await this.finishIfDone(campaign.id);
       return {
         action: 'failed',
@@ -247,31 +289,80 @@ export class SenderService {
     const now = new Date();
     return this.prisma.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<ClaimedRow[]>`
-        SELECT r.id, r.campaign_id, r.contact_id, r.email, r.attempts, r.variant
+        SELECT r.id, r.campaign_id, r.contact_id, r.email, r.attempts
         FROM recipients r
         JOIN campaigns c ON c.id = r.campaign_id
         WHERE r.status = 'queued'
           AND r.next_attempt_at <= ${now}
           AND c.status = 'running'
           AND c.deleted_at IS NULL
-        ORDER BY r.id
+          -- 抑制名单可能在排队之后才增加，取件时必须再拦一次
+          AND NOT EXISTS (SELECT 1 FROM suppressions s WHERE s.email = r.email)
+        -- 与 (status, next_attempt_at) 索引同序，避免每封都对全部到期行排序
+        ORDER BY r.next_attempt_at, r.id
         FOR UPDATE OF r SKIP LOCKED
         LIMIT 1
       `;
       if (rows.length === 0) return null;
       const row = rows[0];
+      const lease = new Date(now.getTime() + LEASE_MS);
       await tx.$executeRaw`
-        UPDATE recipients SET status = 'sending', updated_at = ${now} WHERE id = ${row.id}
+        UPDATE recipients
+        SET status = 'sending', lease_until = ${lease}, updated_at = ${now}
+        WHERE id = ${row.id}
       `;
       return row;
     });
   }
 
   private async release(recipientId: number, delayMs: number) {
-    await this.prisma.recipient.update({
-      where: { id: recipientId },
-      data: { status: 'queued', nextAttemptAt: new Date(Date.now() + delayMs) },
+    // 只回滚还处于 sending 的行：任务被取消时它已经是 canceled，
+    // 无条件 update 会把"已取消"改回"待发送"，进度条永远到不了 100%
+    await this.prisma.recipient.updateMany({
+      where: { id: recipientId, status: 'sending' },
+      data: { status: 'queued', nextAttemptAt: new Date(Date.now() + delayMs), leaseUntil: null },
     });
+  }
+
+  /** 通道/策略层面的永久失败：这条明细判死，但不动抑制名单 */
+  private async markFailed(claimed: ClaimedRow, code: string, message: string) {
+    await this.prisma.recipient.updateMany({
+      where: { id: claimed.id, status: 'sending' },
+      data: {
+        status: 'failed',
+        attempts: claimed.attempts + 1,
+        errorCode: code,
+        errorMessage: message.slice(0, 500),
+        leaseUntil: null,
+      },
+    });
+  }
+
+  /**
+   * 渲染/附件/凭据解密抛异常时的兜底。
+   * 关键点是：无论什么异常，这一行都不能留在 sending，且 attempts 必须推进一次，
+   * 否则它会每 5 分钟被回收、再卡住，任务永远结束不了。
+   */
+  private async recordSendException(claimed: ClaimedRow, campaignId: number, e: any) {
+    const nextAttempts = claimed.attempts + 1;
+    const exhausted = nextAttempts > MAX_RETRIES;
+    const delaySec = RETRY_BACKOFF_SEC[nextAttempts - 1] ?? RETRY_BACKOFF_SEC[RETRY_BACKOFF_SEC.length - 1];
+    const res = await this.prisma.recipient.updateMany({
+      where: { id: claimed.id, status: 'sending' },
+      data: {
+        status: exhausted ? 'failed' : 'queued',
+        attempts: nextAttempts,
+        nextAttemptAt: new Date(Date.now() + (exhausted ? 0 : delaySec * 1000)),
+        leaseUntil: null,
+        errorCode: 'SEND_EXCEPTION',
+        errorMessage: String(e?.message ?? e).slice(0, 500),
+      },
+    });
+    log.error(
+      { recipientId: claimed.id, campaignId, attempts: nextAttempts, err: String(e?.message ?? e) },
+      '发送流程异常，已记账',
+    );
+    if (exhausted && res.count > 0) await this.finishIfDone(campaignId);
   }
 
   /**
@@ -279,13 +370,16 @@ export class SenderService {
    * 抑制是幂等的，重复写入不报错。
    */
   private async failPermanently(claimed: ClaimedRow, message: string, code: string) {
-    await this.prisma.recipient.update({
-      where: { id: claimed.id },
+    // 地址确实不可用，抑制照写；但只有还处于 sending 的明细才改状态，
+    // 避免把用户刚取消的那一行从 canceled 改成 failed
+    await this.prisma.recipient.updateMany({
+      where: { id: claimed.id, status: 'sending' },
       data: {
         status: 'failed',
         attempts: claimed.attempts + 1,
         errorCode: code,
         errorMessage: message,
+        leaseUntil: null,
       },
     });
     await this.prisma.suppression
@@ -316,13 +410,31 @@ export class SenderService {
           ? all.filter((c) => campaign.channelIds.includes(c.id))
           : all;
 
+    // 配额按"真实账号"算：同一 host+username 下的多条发信身份共用服务商额度，
+    // 组内已发数相加才是账号今天真实用量。取组内最小正限额作为账号上限。
+    const accountUsed = new Map<string, number>();
+    const accountLimit = new Map<string, number>();
+    for (const c of all) {
+      const key = `${c.host}|${c.username}`;
+      const used = isSameCalendarDay(c.quotaDate, day) ? Math.max(0, c.sentToday) : 0;
+      accountUsed.set(key, (accountUsed.get(key) ?? 0) + used);
+      const limit = c.dailyLimit > 0 ? c.dailyLimit : 0;
+      const prev = accountLimit.get(key) ?? 0;
+      accountLimit.set(key, prev === 0 ? limit : limit === 0 ? prev : Math.min(prev, limit));
+    }
+
     const usable: { c: Channel; used: number }[] = [];
 
     for (const c of scoped) {
       if (c.status !== 'active') continue;
-      const used = isSameCalendarDay(c.quotaDate, day) ? Math.max(0, c.sentToday) : 0;
-      if (c.dailyLimit > 0 && used >= c.dailyLimit) continue;
-      usable.push({ c, used });
+      const key = `${c.host}|${c.username}`;
+      const limit = accountLimit.get(key) ?? 0;
+      const usedByAccount = accountUsed.get(key) ?? 0;
+      if (limit > 0 && usedByAccount >= limit) continue;
+      usable.push({
+        c,
+        used: isSameCalendarDay(c.quotaDate, day) ? Math.max(0, c.sentToday) : 0,
+      });
     }
 
     if (usable.length === 0) {
@@ -359,16 +471,22 @@ export class SenderService {
 
   /** 队列空了就把任务标记完成，避免停在 running 让人以为还在发 */
   private async finishIfDone(campaignId: number) {
-    const remaining = await this.prisma.recipient.count({
-      where: { campaignId, status: { in: ['queued', 'sending'] } },
-    });
-    if (remaining > 0) return;
+    // 只看"还有没有"，不用数全量：EXISTS 命中即停，比 count 便宜一个数量级
+    const pending = await this.prisma.$queryRaw<{ one: number }[]>`
+      SELECT 1 AS one FROM recipients
+      WHERE campaign_id = ${campaignId} AND status IN ('queued', 'sending')
+      LIMIT 1
+    `;
+    if (pending.length > 0) return;
     const campaign = await this.prisma.campaign.findUnique({ where: { id: campaignId } });
     if (!campaign || campaign.status !== 'running') return;
     await this.prisma.campaign.update({
       where: { id: campaignId },
       data: { status: 'done', finishedAt: new Date() },
+      select: { id: true },
     });
+    this.lastSendByCampaign.delete(campaignId);
+    this.gapByCampaign.delete(campaignId);
     log.info({ campaignId }, '任务已全部处理完成');
   }
 
@@ -381,32 +499,10 @@ export class SenderService {
    */
   private async resolveTemplate(
     campaign: Campaign,
-    variantLabel: string | null,
   ): Promise<{ template: Template | null; subjectTemplate: string }> {
-    let templateId = campaign.templateId;
-    let subjectOverride: string | null = null;
-
-    if (variantLabel) {
-      const variant = await this.prisma.campaignVariant.findUnique({
-        where: { campaignId_label: { campaignId: campaign.id, label: variantLabel } },
-      });
-      if (variant) {
-        if (variant.subject) subjectOverride = variant.subject;
-        if (variant.templateId) templateId = variant.templateId;
-      }
-    }
-
-    let template = await this.prisma.template.findUnique({ where: { id: templateId } });
-    if (!template && templateId !== campaign.templateId) {
-      template = await this.prisma.template.findUnique({ where: { id: campaign.templateId } });
-      log.warn(
-        { campaignId: campaign.id, variantLabel, templateId },
-        '变体模板已不存在，退回任务主模板',
-      );
-    }
+    const template = await this.prisma.template.findUnique({ where: { id: campaign.templateId } });
     if (!template) return { template: null, subjectTemplate: '' };
-
-    return { template, subjectTemplate: subjectOverride ?? template.subject };
+    return { template, subjectTemplate: template.subject };
   }
 
   private async loadAttachments(template: Template): Promise<OutgoingAttachment[]> {

@@ -17,6 +17,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/auth.guard';
 import { ContactsService } from './contacts.service';
 import {
+  BatchDeleteContactsDto,
+  BatchSetListsDto,
   CommitImportDto,
   CreateContactDto,
   QueryContactsDto,
@@ -63,6 +65,18 @@ export class ContactsController {
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.contacts.remove(id);
+  }
+
+  /** 批量删除选中的联系人（含其抑制记录） */
+  @Post('batch-delete')
+  batchRemove(@Body() dto: BatchDeleteContactsDto) {
+    return this.contacts.batchRemove(dto.ids);
+  }
+
+  /** 批量调整分组：追加或整组替换 */
+  @Post('batch-lists')
+  batchSetLists(@Body() dto: BatchSetListsDto) {
+    return this.contacts.batchSetLists(dto.ids, dto.listIds, dto.replace ?? false);
   }
 
   /** 第一步：上传并解析，返回列信息与建议映射，不落库 */

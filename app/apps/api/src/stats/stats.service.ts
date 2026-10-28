@@ -43,14 +43,11 @@ export class StatsService {
       todayFailed,
       todayNewContacts,
       channels,
-      contactGroups,
       campaignGroups,
       queueGroups,
       overdue,
       totalContacts,
-      totalSuppressed,
       windowRecipients,
-      windowEvents,
       activeCampaigns,
     ] = await Promise.all([
       this.prisma.recipient.count({
@@ -88,7 +85,6 @@ export class StatsService {
         },
         orderBy: [{ priority: 'desc' }, { id: 'asc' }],
       }),
-      this.prisma.suppression.groupBy({ by: ['reason'], _count: { _all: true } }),
       this.prisma.campaign.groupBy({
         by: ['status'],
         where: { deletedAt: null },
@@ -99,16 +95,10 @@ export class StatsService {
         where: { status: 'queued', nextAttemptAt: { lte: new Date() } },
       }),
       this.prisma.contact.count(),
-      this.prisma.suppression.count(),
       // 窗口内的送达/失败，用于算送达率
       this.prisma.recipient.groupBy({
         by: ['status'],
         where: { OR: [{ sentAt: { gte: windowStart } }, { updatedAt: { gte: windowStart } }] },
-        _count: { _all: true },
-      }),
-      this.prisma.event.groupBy({
-        by: ['type'],
-        where: { createdAt: { gte: windowStart } },
         _count: { _all: true },
       }),
       this.prisma.campaign.count({
@@ -126,8 +116,13 @@ export class StatsService {
     const counts: Record<string, number> = {};
     for (const g of queueGroups) counts[g.status] = g._count._all;
 
-    const suppressCounts: Record<string, number> = {};
-    for (const g of contactGroups) suppressCounts[g.reason] = g._count._all;
+    // 地址不存在 = 抑制名单 ∩ 联系人表。用 EXISTS 一条 SQL 算完，
+    // 以前是把整张抑制表读进内存再拼成巨大的 IN，名单上万直接撞参数上限
+    const blockedRows = await this.prisma.$queryRaw<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count FROM contacts c
+      WHERE EXISTS (SELECT 1 FROM suppressions s WHERE s.email = c.email)
+    `;
+    const blockedContacts = blockedRows[0]?.count ?? 0;
 
     const campaignCounts: Record<string, number> = {};
     for (const g of campaignGroups) campaignCounts[g.status] = g._count._all;
@@ -139,9 +134,6 @@ export class StatsService {
       if (g.status === 'sent') wSent = g._count._all;
       if (g.status === 'failed' || g.status === 'suppressed') wFailed += g._count._all;
     }
-    const eventCounts: Record<string, number> = {};
-    for (const g of windowEvents) eventCounts[g.type] = g._count._all;
-
     const [windowOpened, windowClicked] = await Promise.all([
       this.prisma.recipient.count({ where: { openedAt: { gte: windowStart } } }),
       this.prisma.recipient.count({ where: { clickedAt: { gte: windowStart } } }),
@@ -193,10 +185,9 @@ export class StatsService {
       },
       totals: {
         contacts: totalContacts,
-        // 可投递 = 总联系人里不在抑制名单的（抑制名单是唯一的"别发"依据）
-        reachable: Math.max(0, totalContacts - totalSuppressed),
-        bouncedContacts: suppressCounts.bounce ?? 0,
-        suppressed: totalSuppressed,
+        // 可投递 = 总联系人里地址正常的（地址不存在的人已被移出所有分组并停止发送）
+        reachable: Math.max(0, totalContacts - blockedContacts),
+        undeliverable: blockedContacts,
         campaigns: [...campaignGroups].reduce((s, g) => s + g._count._all, 0),
         activeCampaigns,
         doneCampaigns: campaignCounts.done ?? 0,

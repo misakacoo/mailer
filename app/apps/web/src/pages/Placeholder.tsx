@@ -14,7 +14,7 @@ export default function Placeholder({
 }) {
   return (
     <div className="page">
-      <PageHeader title={title} desc={`该层按进度表推进到 ${layer} 时接入`} extra={<Tag>{layer}</Tag>} />
+      <PageHeader title={title} extra={<Tag>{layer}</Tag>} />
       <Section title="尚未开发">
         <Card>
           <Empty

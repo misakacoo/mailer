@@ -65,11 +65,11 @@ export default function Account() {
 
   return (
     <div className="page">
-      <PageHeader title="账号设置" desc="登录用的账号与密码，修改后立即生效" />
+      <PageHeader title="账号设置" />
 
       <Row gutter={metrics.gridGutter} align="stretch">
         <Col span={15}>
-          <Section title="登录凭据" desc="修改前需要验证当前密码" style={{ height: '100%' }}>
+          <Section title="登录凭据" style={{ height: '100%' }}>
             <Card style={{ height: '100%' }}>
               <Form form={form} layout="vertical" onFinish={save} requiredMark={false}>
                 <Row gutter={metrics.gridGutter}>

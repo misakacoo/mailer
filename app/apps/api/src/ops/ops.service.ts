@@ -1,4 +1,5 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import * as bcrypt from 'bcryptjs';
 import { X509Certificate } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -348,24 +349,36 @@ export class OpsService {
    * 审计拦截器会在响应返回后自己写一条 ops.audit.clear，
    * 手写会变成两条，反而让人以为清了还剩。
    */
-  async clearAuditLogs(params: { beforeDays?: number }) {
-    const days = params.beforeDays;
-    const where =
-      days !== undefined && days > 0
-        ? { createdAt: { lt: new Date(Date.now() - days * 86400000) } }
-        : {};
+  async clearAuditLogs(params: { beforeDays: number; currentPassword: string; all?: boolean }) {
+    const { beforeDays, currentPassword, all } = params;
+
+    // 二次鉴权：会话 Cookie 被盗时，不能顺手把痕迹抹掉
+    const account = await this.prisma.adminAccount.findUnique({ where: { id: 1 } });
+    const passOk = account
+      ? await bcrypt.compare(currentPassword ?? '', account.passwordHash).catch(() => false)
+      : false;
+    if (!passOk) throw new BadRequestException('当前密码不正确，无法清理审计日志');
+
+    // 全清必须显式 all=1，且仍然保留最近 7 天，避免"两个请求抹掉全部痕迹"
+    const days = all ? 7 : beforeDays;
+    const where = { createdAt: { lt: new Date(Date.now() - days * 86400000) } };
 
     const before = await this.prisma.auditLog.count({ where });
-    if (before === 0) return { deleted: 0, beforeDays: days ?? null };
+    if (before === 0) return { deleted: 0, beforeDays: days };
 
     const r = await this.prisma.auditLog.deleteMany({ where });
-    log.info({ deleted: r.count, beforeDays: days ?? null }, '已清理审计日志');
-    return { deleted: r.count, beforeDays: days ?? null };
+    log.info({ deleted: r.count, beforeDays: days }, '已清理审计日志');
+    return { deleted: r.count, beforeDays: days };
   }
 
   /** 手工标记一次备份时间，供备份脚本以外的场景使用 */
   async markBackup(at: string | undefined) {
-    const value = at && !Number.isNaN(new Date(at).getTime()) ? new Date(at).toISOString() : new Date().toISOString();
+    const raw = at ? new Date(at) : new Date();
+    const now = Date.now();
+    // 未来时间会让"备份是否及时"的检查永远通过，必须挡掉
+    const valid =
+      !Number.isNaN(raw.getTime()) && raw.getTime() <= now + 60_000 && raw.getTime() >= now - 7 * 86400000;
+    const value = (valid ? raw : new Date()).toISOString();
     await this.prisma.systemState.upsert({
       where: { key: BACKUP_KEY },
       create: { key: BACKUP_KEY, value },
@@ -381,9 +394,10 @@ export class OpsService {
       platform: `${process.platform} ${process.arch}`,
       uptimeSec: Math.round(process.uptime()),
       rssMb: Math.round((process.memoryUsage().rss / 1024 / 1024) * 10) / 10,
+      // 绝对路径不对外回显：这是攻击者最想要的部署结构信息
       appUrl: this.cfg.appUrl,
-      backupDir: this.cfg.backupDir,
-      tlsCertPath: this.cfg.tlsCertPath,
+      backupDir: this.cfg.backupDir ? '已配置' : '未配置',
+      tlsCertPath: this.cfg.tlsCertPath ? '已配置' : '未配置',
       quotaToday: await this.todayQuota(),
     };
   }

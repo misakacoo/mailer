@@ -2,7 +2,7 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { APP_CONFIG, AppConfig } from '../common/config';
 import { log } from '../common/logger';
 import { PrismaService } from '../common/prisma.service';
-import { calendarDay, dayToDbDate, isSameCalendarDay } from '../common/quota';
+import { calendarDay } from '../common/quota';
 import { buildTransporter, credentialFromChannel, smtpErrorText } from '../common/smtp';
 
 /** 连续失败多少次自动停用通道。与「测试发信」路径保持同一阈值。 */
@@ -53,8 +53,14 @@ export interface SendResult {
   message: string;
 }
 
+/** 连接池 TTL：通道配置改了最多 5 分钟内生效，换来不用每封信都重新握手认证 */
+const POOL_TTL_MS = 5 * 60 * 1000;
+
 @Injectable()
 export class MailService {
+  /** channelId -> 复用的 SMTP 连接池。发送节奏慢，但省下的是每封 300~800ms 的握手 */
+  private pools = new Map<number, { transporter: any; at: number }>();
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(APP_CONFIG) private readonly cfg: AppConfig,
@@ -69,7 +75,19 @@ export class MailService {
     if (!channel) throw new NotFoundException('通道不存在');
 
     const started = Date.now();
-    const transporter = buildTransporter(credentialFromChannel(channel, this.cfg.credKey));
+
+    // 发送前原子占用一条额度：并发下不会超发，没额度时连连接都不建
+    const reserved = await this.reserveQuota(channelId, calendarDay());
+    if (!reserved) {
+      return {
+        ok: false,
+        code: 'QUOTA_EXCEEDED',
+        elapsedMs: Date.now() - started,
+        message: '该发件邮箱今日额度已用完',
+      };
+    }
+
+    const transporter = this.getTransporter(channelId, channel);
 
     try {
       const info = await transporter.sendMail({
@@ -106,9 +124,62 @@ export class MailService {
         elapsedMs: Date.now() - started,
         message: text,
       };
-    } finally {
-      transporter.close();
     }
+  }
+
+  /**
+   * 原子占用额度：一条 UPDATE 同时做"跨天清零"和"未满才 +1"。
+   * 返回 false 代表今天已经没额度了——这比"先读后写"的检查可靠。
+   */
+  private async reserveQuota(channelId: number, day: string): Promise<boolean> {
+    try {
+      const affected = await this.prisma.$executeRaw`
+        UPDATE channels
+        SET sent_today = CASE
+              WHEN quota_date IS DISTINCT FROM ${day}::date THEN 1
+              ELSE sent_today + 1
+            END,
+            quota_date = ${day}::date
+        WHERE id = ${channelId}
+          AND (
+            quota_date IS DISTINCT FROM ${day}::date
+            OR daily_limit = 0
+            OR sent_today < daily_limit
+          )
+      `;
+      return affected > 0;
+    } catch (e: any) {
+      // 计数失败不能把信卡住：放行，但记日志
+      log.warn({ channelId, err: String(e?.message ?? e) }, '配额预占失败，放行本条');
+      return true;
+    }
+  }
+
+  private getTransporter(channelId: number, channel: any) {
+    const cached = this.pools.get(channelId);
+    if (cached && Date.now() - cached.at < POOL_TTL_MS) return cached.transporter;
+    if (cached) {
+      try {
+        cached.transporter.close();
+      } catch {
+        // 连接可能已经断了
+      }
+    }
+    const transporter = buildTransporter(credentialFromChannel(channel, this.cfg.credKey), { pool: true });
+    this.pools.set(channelId, { transporter, at: Date.now() });
+    return transporter;
+  }
+
+  /** 通道被删/改时清掉池，下一次发送重新建连 */
+  dropPool(channelId: number) {
+    const cached = this.pools.get(channelId);
+    if (!cached) return;
+    try {
+      cached.transporter.close();
+    } catch {
+      // 忽略
+    }
+    this.pools.delete(channelId);
   }
 
   /**
@@ -118,36 +189,20 @@ export class MailService {
    * 只恢复 error 状态，手工 paused 的不动——那是人的决定，不该被一封成功信推翻。
    */
   private async recordSend(channelId: number) {
-    const day = calendarDay();
     try {
-      await this.prisma.$transaction(async (tx) => {
-        const c = await tx.channel.findUnique({ where: { id: channelId } });
-        if (!c) return;
-        const revive = c.status === 'error' ? { status: 'active' } : {};
-        if (!isSameCalendarDay(c.quotaDate, day)) {
-          await tx.channel.update({
-            where: { id: channelId },
-            data: {
-              sentToday: 1,
-              quotaDate: dayToDbDate(day),
-              lastSentAt: new Date(),
-              lastOkAt: new Date(),
-              consecutiveFailures: 0,
-              ...revive,
-            },
-          });
-        } else {
-          await tx.channel.update({
-            where: { id: channelId },
-            data: {
-              sentToday: { increment: 1 },
-              lastSentAt: new Date(),
-              lastOkAt: new Date(),
-              consecutiveFailures: 0,
-              ...revive,
-            },
-          });
-        }
+      // sent_today 已由 reserveQuota() 在发送前原子 +1，这里只维护健康状态，
+      // 否则同一封会被记两次，配额提前见底
+      const c = await this.prisma.channel.findUnique({ where: { id: channelId } });
+      if (!c) return;
+      const revive = c.status === 'error' ? { status: 'active' as const } : {};
+      await this.prisma.channel.update({
+        where: { id: channelId },
+        data: {
+          lastSentAt: new Date(),
+          lastOkAt: new Date(),
+          consecutiveFailures: 0,
+          ...revive,
+        },
       });
     } catch {
       // 计数失败不应影响"邮件已发出"这个事实

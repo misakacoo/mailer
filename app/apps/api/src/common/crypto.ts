@@ -44,8 +44,8 @@ export function decryptSecret(payload: string, hexKey: string): string {
   return plain.toString('utf8');
 }
 
-/** 用于展示：只保留首尾字符 */
+/** 用于展示：只留最后两位，6 位授权码不至于被截图看走 4 位 */
 export function maskSecret(plain: string): string {
-  if (plain.length <= 4) return '****';
-  return `${plain.slice(0, 2)}****${plain.slice(-2)}`;
+  if (plain.length <= 6) return '****';
+  return `****${plain.slice(-2)}`;
 }

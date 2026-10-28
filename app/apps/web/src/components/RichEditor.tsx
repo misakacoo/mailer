@@ -28,6 +28,27 @@ export interface RichEditorHandle {
  * 它们产出带 class 和外部 <style> 的 HTML，而绝大多数邮件客户端会丢掉 <style> 和 class，
  * 发出去排版就散了。execCommand 产出的内联标签虽然朴素，但在邮件里反而更可靠。
  */
+
+/**
+ * 回填前的兜底净化。
+ *
+ * 服务端入库时已经净化过一次，这里再挡一层是为了历史数据（净化上线前存的模板）：
+ * contentEditable 里写 innerHTML，带 onerror 的图片会直接在同源执行脚本。
+ */
+function safeHtml(raw: string): string {
+  let out = String(raw ?? '');
+  for (let i = 0; i < 4; i++) {
+    const next = out
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+      .replace(/<(iframe|object|embed|base|link|meta)\b[^>]*>/gi, '')
+      .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+      .replace(/javascript\s*:/gi, '');
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
 const RichEditor = forwardRef<RichEditorHandle, { value: string; onChange: (html: string) => void }>(
   function RichEditor({ value, onChange }, ref) {
     const boxRef = useRef<HTMLDivElement>(null);
@@ -37,7 +58,7 @@ const RichEditor = forwardRef<RichEditorHandle, { value: string; onChange: (html
       if (!boxRef.current) return;
       // 只在外部值真的变了时才写回 DOM，否则每次输入都会重置光标
       if (value !== lastEmitted.current) {
-        boxRef.current.innerHTML = value;
+        boxRef.current.innerHTML = safeHtml(value);
         lastEmitted.current = value;
       }
     }, [value]);

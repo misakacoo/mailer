@@ -1,6 +1,5 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
   IsDateString,
@@ -8,37 +7,11 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  Matches,
   Max,
   MaxLength,
   Min,
   MinLength,
-  ValidateNested,
 } from 'class-validator';
-
-/** 一个 A/B 变体：标签 + 可选的覆盖项。两者都为空等于和主模板一模一样。 */
-export class CampaignVariantDto {
-  @IsString()
-  @Matches(/^[A-Z][0-9]?$/, { message: '变体标签只能是 A、B、C 这样的单字母（可带一位序号）' })
-  label: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  subject?: string;
-
-  @IsOptional()
-  @IsInt()
-  @Type(() => Number)
-  templateId?: number;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  @Type(() => Number)
-  weight?: number;
-}
 
 export class CreateCampaignDto {
   @IsString()
@@ -104,12 +77,6 @@ export class CreateCampaignDto {
   @IsDateString()
   recurrenceUntil?: string;
 
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(3, { message: '最多 3 个变体' })
-  @ValidateNested({ each: true })
-  @Type(() => CampaignVariantDto)
-  variants?: CampaignVariantDto[];
 }
 
 export class UpdateCampaignDto {
@@ -172,12 +139,6 @@ export class UpdateCampaignDto {
   @IsDateString()
   recurrenceUntil?: string;
 
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(3, { message: '最多 3 个变体' })
-  @ValidateNested({ each: true })
-  @Type(() => CampaignVariantDto)
-  variants?: CampaignVariantDto[];
 }
 
 /** 排期：把草稿挂到一个未来的时间点，由 worker 到点自动开跑 */

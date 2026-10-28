@@ -42,7 +42,7 @@ export function credentialFromChannel(c: Channel, credKey: string): SmtpCredenti
   return { host: c.host, port: c.port, secure: c.secure, username: c.username, password };
 }
 
-export function buildTransporter(c: SmtpCredential) {
+export function buildTransporter(c: SmtpCredential, opts?: { pool?: boolean }) {
   return nodemailer.createTransport({
     host: c.host,
     port: c.port,
@@ -52,5 +52,7 @@ export function buildTransporter(c: SmtpCredential) {
     greetingTimeout: 15000,
     socketTimeout: 30000,
     tls: { minVersion: 'TLSv1.2' },
+    // 任务发送走连接池：一封一封发也要复用同一条会话，省掉每封一次的 TLS+AUTH
+    ...(opts?.pool ? { pool: true, maxConnections: 1, maxMessages: 100 } : {}),
   });
 }

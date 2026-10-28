@@ -28,7 +28,6 @@ export default function Login({ onDone }: { onDone: () => void }) {
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, lineHeight: 1.3, color: tokens.ink }}>
             邮件营销系统
           </h1>
-          <p style={{ margin: '8px 0 0', fontSize: 13, color: tokens.muted }}>单管理员登录</p>
         </div>
 
         <Form layout="vertical" onFinish={onFinish} requiredMark={false} autoComplete="on">

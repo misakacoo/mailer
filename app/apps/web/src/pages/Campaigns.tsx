@@ -36,28 +36,6 @@ import Section from '../components/Section';
 import PageHeader from '../components/PageHeader';
 import { metrics, statusOf, tokens } from '../theme';
 
-/** 一个 A/B 变体：只改主题、或整套换模板，两者至少有一项 */
-interface VariantDraft {
-  label: string;
-  subject: string;
-  templateId?: number;
-  weight: number;
-}
-
-interface VariantStat {
-  label: string;
-  subject: string | null;
-  weight: number;
-  total: number;
-  sent: number;
-  failed: number;
-  pending: number;
-  opened: number;
-  clicked: number;
-  openRate: number;
-  clickRate: number;
-}
-
 interface CampaignRow {
   id: number;
   name: string;
@@ -72,7 +50,6 @@ interface CampaignRow {
   recurrenceUntil: string | null;
   seriesId: number | null;
   deletedAt: string | null;
-  variantLabels: string[];
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -85,23 +62,14 @@ interface CampaignDetail extends CampaignRow {
   channelIds: number[];
   channelGroupIds: number[];
   progress: number;
-  variants: { label: string; subject: string | null; templateId: number | null; weight: number }[];
-  variantStats: VariantStat[];
-  winnerLabel: string | null;
-  recentFailures: {
-    id: number;
-    email: string;
-    attempts: number;
-    errorCode: string | null;
-    errorMessage: string | null;
-  }[];
+  openedCount: number;
+  clickedCount: number;
 }
 
 interface RecipientRow {
   id: number;
   email: string;
   status: string;
-  variant: string | null;
   attempts: number;
   channelId: number | null;
   messageId: string | null;
@@ -120,8 +88,6 @@ interface DraftState {
   sendIntervalSec: number;
   /** 最大间隔；null = 固定间隔 */
   sendIntervalMaxSec: number | null;
-  /** 空数组 = 不用 A/B */
-  variants: VariantDraft[];
   /** now=保存后立即发 / later=到点由 worker 启动 */
   scheduleMode: 'now' | 'later';
   scheduledAt: string | null;
@@ -138,7 +104,6 @@ const emptyDraft = (): DraftState => ({
   channelGroupIds: [],
   sendIntervalSec: 30,
   sendIntervalMaxSec: null,
-  variants: [],
   scheduleMode: 'now',
   scheduledAt: null,
   recurrence: 'none',
@@ -152,15 +117,6 @@ const RECURRENCE_OPTIONS = [
   { value: 'weekly', label: '每周' },
   { value: 'monthly', label: '每月' },
 ];
-
-/** 打开 A/B 时的初始两版：A 沿用主模板主题，B 留空逼用户真的写出一个不同版本 */
-function defaultVariants(tpls: TemplateOpt[], templateId?: number): VariantDraft[] {
-  const main = tpls.find((t) => t.id === templateId);
-  return [
-    { label: 'A', subject: main?.subject ?? '', weight: 50 },
-    { label: 'B', subject: '', weight: 50 },
-  ];
-}
 
 interface TemplateOpt {
   id: number;
@@ -462,12 +418,6 @@ export default function Campaigns() {
         channelGroupIds: d.channelGroupIds ?? [],
         sendIntervalSec: d.sendIntervalSec,
         sendIntervalMaxSec: d.sendIntervalMaxSec ?? null,
-        variants: (d.variants ?? []).map((v) => ({
-          label: v.label,
-          subject: v.subject ?? '',
-          templateId: v.templateId ?? undefined,
-          weight: v.weight,
-        })),
         scheduleMode: 'now',
         scheduledAt: d.scheduledAt,
         recurrence: (d.recurrence as DraftState['recurrence']) ?? 'none',
@@ -483,8 +433,8 @@ export default function Campaigns() {
   };
 
   /**
-   * 受众人数一律以服务端为准：分组人数减去抑制名单。
-   * 前端把各分组 contactCount 相加会多算抑制地址，出现"显示 2 人只发 1 封"。
+   * 受众人数一律以服务端为准：分组人数减去地址不存在的人。
+   * 前端把各分组 contactCount 相加会多算，出现"显示 2 人只发 1 封"。
    */
   const [audience, setAudience] = useState<{ total: number; reachable: number; skipped: number } | null>(null);
   useEffect(() => {
@@ -514,12 +464,8 @@ export default function Campaigns() {
     return Math.ceil((estimateCount * gap) / 60);
   }, [estimateCount, draft.sendIntervalSec, draft.sendIntervalMaxSec]);
 
-  const variantsReady =
-    draft.variants.length === 0 ||
-    draft.variants.every((v) => v.subject.trim().length > 0 || Boolean(v.templateId));
-
   const canNext = () => {
-    if (step === 0) return Boolean(draft.name.trim() && draft.templateId && variantsReady);
+    if (step === 0) return Boolean(draft.name.trim() && draft.templateId);
     if (step === 1) return draft.listIds.length > 0;
     if (step === 2) return draft.sendIntervalMaxSec === null || draft.sendIntervalMaxSec >= draft.sendIntervalSec;
     if (step === 3) return draft.scheduleMode === 'now' || Boolean(draft.scheduledAt);
@@ -538,12 +484,6 @@ export default function Campaigns() {
         channelGroupIds: draft.channelGroupIds,
         sendIntervalSec: draft.sendIntervalSec,
         sendIntervalMaxSec: draft.sendIntervalMaxSec ?? undefined,
-        variants: draft.variants.map((v) => ({
-          label: v.label,
-          subject: v.subject.trim() || undefined,
-          templateId: v.templateId,
-          weight: v.weight,
-        })),
         recurrence: draft.recurrence,
         recurrenceInterval: draft.recurrenceInterval,
         recurrenceUntil: draft.recurrence === 'none' ? undefined : draft.recurrenceUntil ?? undefined,
@@ -605,23 +545,6 @@ export default function Campaigns() {
           <a onClick={() => openDetail(r.id)} style={{ color: tokens.ink, fontWeight: 500 }}>
             {v}
           </a>
-          {r.variantLabels.length > 0 && (
-            <span
-              style={{
-                marginLeft: 6,
-                padding: '0 5px',
-                borderRadius: 4,
-                border: `1px solid ${tokens.borderStrong}`,
-                color: tokens.muted,
-                fontSize: 11,
-                lineHeight: '16px',
-                display: 'inline-block',
-              }}
-              title={`A/B：${r.variantLabels.join(' / ')}`}
-            >
-              A/B
-            </span>
-          )}
           {r.recurrence && (
             <span
               style={{
@@ -783,27 +706,30 @@ export default function Campaigns() {
   ];
 
   const detailCounts = detail?.counts ?? {};
+  // 送达率只按"已经有结果"的投递算，排队中的不能算进分母
+  const settledCount =
+    (detailCounts.sent ?? 0) +
+    (detailCounts.failed ?? 0) +
+    (detailCounts.suppressed ?? 0) +
+    (detailCounts.canceled ?? 0);
+  const deliveryRateText =
+    settledCount > 0
+      ? `${Math.round(((detailCounts.sent ?? 0) / settledCount) * 1000) / 10}%`
+      : '—';
   const recipientColumns = [
     { title: '收件人', dataIndex: 'email', render: (v: string) => <span className="mono">{v}</span> },
-    ...(detail && detail.variantStats.length > 0
-      ? [
-          {
-            title: '变体',
-            dataIndex: 'variant',
-            width: 56,
-            render: (v: string | null) => (
-              <span style={{ fontSize: 12, color: tokens.muted }}>{v ?? '—'}</span>
-            ),
-          },
-        ]
-      : []),
     {
       title: '状态',
       dataIndex: 'status',
       width: 90,
       render: (v: string) => <StatusPill status={v} />,
     },
-    { title: '尝试', dataIndex: 'attempts', width: 60 },
+    {
+      title: '尝试',
+      dataIndex: 'attempts',
+      width: 80,
+      render: (v: number) => <span style={{ whiteSpace: 'nowrap' }}>{v}</span>,
+    },
     {
       title: '结果',
       render: (_: unknown, r: RecipientRow) =>
@@ -823,7 +749,6 @@ export default function Campaigns() {
     <div className="page">
       <PageHeader
         title="群发任务"
-        desc="按批次组织收件人，支持定时与周期发送"
         note={
           recycleBin ? (
             <span style={{ fontSize: 12, color: tokens.warning }}>
@@ -847,7 +772,7 @@ export default function Campaigns() {
         }
       />
 
-      <Section title="任务列表" desc="发出去之后可以随时暂停，已发出的不受影响">
+      <Section title="任务列表">
         <Card className="card-table">
           <Table<CampaignRow>
             rowKey="id"
@@ -946,99 +871,13 @@ export default function Campaigns() {
               )}
             </div>
 
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                <div>
-                  <div style={{ fontSize: 13, color: tokens.ink }}>A/B 测试</div>
-                  <div style={{ fontSize: 12, color: tokens.muted, marginTop: 2 }}>
-                    按权重把收件人分成两版发送，发完在详情里对比打开率
-                  </div>
-                </div>
-                <Switch
-                  checked={draft.variants.length > 0}
-                  onChange={(on) =>
-                    setDraft({ ...draft, variants: on ? defaultVariants(templates, draft.templateId) : [] })
-                  }
-                />
-              </div>
-
-              {draft.variants.length > 0 && (
-                <div style={{ marginTop: 10, border: `1px solid ${tokens.border}`, borderRadius: 8 }}>
-                  {draft.variants.map((v, i) => (
-                    <div
-                      key={v.label}
-                      style={{
-                        display: 'flex',
-                        gap: 8,
-                        alignItems: 'center',
-                        padding: '10px 12px',
-                        borderTop: i === 0 ? 'none' : `1px solid ${tokens.border}`,
-                      }}
-                    >
-                      <span style={{ width: 16, fontSize: 13, fontWeight: 500, color: tokens.ink }}>
-                        {v.label}
-                      </span>
-                      <Input
-                        size="small"
-                        placeholder="这一版的主题，留空则用模板主题"
-                        value={v.subject}
-                        onChange={(e) => {
-                          const next = [...draft.variants];
-                          next[i] = { ...next[i], subject: e.target.value };
-                          setDraft({ ...draft, variants: next });
-                        }}
-                        style={{ flex: 1, minWidth: 0 }}
-                      />
-                      <Select
-                        size="small"
-                        allowClear
-                        placeholder="模板"
-                        style={{ width: 130 }}
-                        value={v.templateId}
-                        onChange={(val) => {
-                          const next = [...draft.variants];
-                          next[i] = { ...next[i], templateId: val };
-                          setDraft({ ...draft, variants: next });
-                        }}
-                        options={templates.map((t) => ({ value: t.id, label: t.name }))}
-                      />
-                      <InputNumber
-                        size="small"
-                        min={1}
-                        max={100}
-                        value={v.weight}
-                        onChange={(val) => {
-                          const next = [...draft.variants];
-                          next[i] = { ...next[i], weight: val ?? 50 };
-                          setDraft({ ...draft, variants: next });
-                        }}
-                        style={{ width: 72 }}
-                      />
-                    </div>
-                  ))}
-                  <div
-                    style={{
-                      padding: '8px 12px',
-                      borderTop: `1px solid ${tokens.border}`,
-                      fontSize: 12,
-                      color: tokens.muted,
-                    }}
-                  >
-                    每一版必须改主题或换模板；权重按组内归一化，不要求凑成 100（{draft.variants
-                      .map((v) => `${v.label} ${v.weight}`)
-                      .join(' : ')}
-                    ）。
-                  </div>
-                </div>
-              )}
-            </div>
           </div>
         )}
 
         {step === 1 && (
           <div>
             <div style={{ fontSize: 13, color: tokens.muted, marginBottom: 10 }}>
-              只发送可投递的联系人；抑制名单（退信、投诉等）里的地址会被自动跳过。
+              只发送可投递的联系人；地址不存在（硬退信）的联系人会被自动跳过。
             </div>
             {lists.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有分组" />
@@ -1171,7 +1010,7 @@ export default function Campaigns() {
                   />
                   <div style={{ fontSize: 12, color: tokens.muted, marginTop: 6, lineHeight: 1.6 }}>
                     到点由发送进程启动，检查间隔 30 秒。排期后收件人还没有确定，
-                    届时按当时的联系人名单展开——这期间新增的抑制地址不会收到。
+                    届时按当时的联系人名单展开——这期间新增的地址不存在联系人不会收到。
                   </div>
                 </div>
               )}
@@ -1222,16 +1061,6 @@ export default function Campaigns() {
               {[
                 ['任务名称', draft.name],
                 ['使用模板', templates.find((t) => t.id === draft.templateId)?.name ?? '—'],
-                ...(draft.variants.length > 0
-                  ? [
-                      [
-                        'A/B 变体',
-                        draft.variants
-                          .map((v) => `${v.label}：${v.subject || '（用模板主题）'} · 权重 ${v.weight}`)
-                          .join('；'),
-                      ],
-                    ]
-                  : []),
                 [
                   '收件分组',
                   lists
@@ -1259,7 +1088,7 @@ export default function Campaigns() {
                 [
                   '预计收件人',
                   audience && audience.skipped > 0
-                    ? `约 ${estimateCount} 人（另有 ${audience.skipped} 个地址在抑制名单，不会发送）`
+                    ? `约 ${estimateCount} 人（另有 ${audience.skipped} 个地址不存在，不会发送）`
                     : `约 ${estimateCount} 人`,
                 ],
                 ['预计耗时', estimateMinutes > 0 ? `约 ${estimateMinutes} 分钟` : '—'],
@@ -1355,14 +1184,24 @@ export default function Campaigns() {
       >
         {detail && (
           <>
-            <div style={{ display: 'flex', gap: 24, marginBottom: 16 }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+                gap: metrics.snug,
+                marginBottom: 16,
+              }}
+            >
               {[
                 ['已送达', detailCounts.sent ?? 0, tokens.successDeep],
                 ['失败', detailCounts.failed ?? 0, detailCounts.failed ? tokens.destructive : tokens.muted],
                 ['待发送', detailCounts.queued ?? 0, tokens.muted],
                 ['已取消', detailCounts.canceled ?? 0, tokens.muted],
+                ['送达率', deliveryRateText, tokens.ink],
+                ['打开', detail.openedCount, tokens.ink],
+                ['点击', detail.clickedCount, tokens.ink],
               ].map(([label, value, color]) => (
-                <div key={label as string} style={{ minWidth: 72 }}>
+                <div key={label as string} style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 11, color: tokens.muted }}>{label}</div>
                   <div style={{ fontSize: 24, fontWeight: 500, color: color as string, lineHeight: 1.3 }}>
                     {value}
@@ -1386,98 +1225,6 @@ export default function Campaigns() {
                       : '未开始'}
               </span>
             </div>
-
-            {detail.variantStats.length > 0 && (
-              <div style={{ border: `1px solid ${tokens.border}`, borderRadius: 8, marginBottom: 16 }}>
-                <div
-                  style={{
-                    padding: '8px 14px',
-                    borderBottom: `1px solid ${tokens.border}`,
-                    fontSize: 13,
-                    color: tokens.ink,
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    gap: 12,
-                  }}
-                >
-                  <span>A/B 对比</span>
-                  <span
-                    style={{
-                      fontSize: 12,
-                      color: detail.winnerLabel ? tokens.successDeep : tokens.muted,
-                    }}
-                  >
-                    {detail.winnerLabel
-                      ? `打开率更高：${detail.winnerLabel}`
-                      : '样本不足，暂不下结论'}
-                  </span>
-                </div>
-                {detail.variantStats.map((v, i) => (
-                  <div
-                    key={v.label}
-                    style={{
-                      padding: '8px 14px',
-                      borderTop: i === 0 ? 'none' : `1px solid ${tokens.border}`,
-                      fontSize: 12,
-                      display: 'flex',
-                      gap: 10,
-                      alignItems: 'baseline',
-                    }}
-                  >
-                    <span style={{ fontWeight: 500, color: tokens.ink, width: 14 }}>{v.label}</span>
-                    <span
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        color: tokens.muted,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                      title={v.subject ?? ''}
-                    >
-                      {v.subject || '（用模板主题）'} · 权重 {v.weight}
-                    </span>
-                    <span style={{ width: 54, textAlign: 'right' }}>已发 {v.sent}</span>
-                    <span style={{ width: 62, textAlign: 'right' }}>打开 {v.openRate}%</span>
-                    <span style={{ width: 62, textAlign: 'right' }}>点击 {v.clickRate}%</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {detail.recentFailures.length > 0 && (
-              <div
-                style={{
-                  border: `1px solid ${tokens.border}`,
-                  borderRadius: 8,
-                  marginBottom: 16,
-                }}
-              >
-                <div style={{ padding: '8px 14px', borderBottom: `1px solid ${tokens.border}`, fontSize: 13, color: tokens.ink }}>
-                  最近失败（{detail.recentFailures.length}）
-                </div>
-                {detail.recentFailures.map((f, i) => (
-                  <div
-                    key={f.id}
-                    style={{
-                      padding: '8px 14px',
-                      borderTop: i === 0 ? 'none' : `1px solid ${tokens.border}`,
-                      fontSize: 12,
-                    }}
-                  >
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <span className="mono" style={{ color: tokens.ink }}>
-                        {f.email}
-                      </span>
-                      <span style={{ color: tokens.muted }}>尝试 {f.attempts} 次</span>
-                      <span style={{ color: tokens.destructive }}>{f.errorCode}</span>
-                    </div>
-                    <div style={{ color: tokens.muted, marginTop: 2 }}>{f.errorMessage}</div>
-                  </div>
-                ))}
-              </div>
-            )}
 
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
               <div style={{ fontSize: 13, color: tokens.ink }}>投递明细</div>
