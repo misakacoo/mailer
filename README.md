@@ -152,7 +152,7 @@ mail.example.com {
 | `DB_PASSWORD` | 是 | 数据库密码，`openssl rand -hex 24` 生成一个 |
 | `APP_URL` | 是 | 面板对外地址，如 `https://mail.example.com` |
 | `ADMIN_EMAIL` | 否 | 初始账号，默认 `admin`，仅首次写库时使用 |
-| `ADMIN_PASSWORD` | 否 | 初始密码，默认 `admin`，仅首次写库时使用 |
+| `ADMIN_PASSWORD` | 否 | 初始密码，仅首次写库时使用；**留空则随机生成并打印到容器日志** |
 | `API_PORT` / `WEB_PORT` | 否 | 宿主机回环端口，默认 3000 / 8080 |
 
 其余密钥（`CRED_KEY`、`JWT_SECRET`、密码哈希）由容器首次启动生成，写在 `data` 卷的 `secrets.env`。
@@ -170,8 +170,8 @@ mail.example.com {
 镜像默认 `latest`（跟随 main）。**生产环境建议钉到具体版本**，避免某次 `docker compose pull` 把线上换成没测过的构建——在 `.env` 里加两行：
 
 ```bash
-MAILER_IMAGE=ghcr.io/misakacoo/mailer:v1.1.0
-MAILER_WEB_IMAGE=ghcr.io/misakacoo/mailer-web:v1.1.0
+MAILER_IMAGE=ghcr.io/misakacoo/mailer:v1.1.1
+MAILER_WEB_IMAGE=ghcr.io/misakacoo/mailer-web:v1.1.1
 ```
 
 升级就是改这两个值再重建：
