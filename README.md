@@ -106,6 +106,7 @@ docker compose up -d
 
 ```nginx
 server {
+    # nginx 1.25 之前没有 `http2 on;`，只能写在 listen 上
     listen 443 ssl http2;
     server_name mail.example.com;
 
@@ -113,6 +114,11 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/mail.example.com/privkey.pem;
 
     client_max_body_size 25m;          # 与导入上限一致
+
+    # 面板页面由 web 容器直出，不带头；API 自己会带，但 HTML 这一层要靠反代补
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
 
     location /api/ {
         proxy_pass http://127.0.0.1:3000;
@@ -144,11 +150,20 @@ Caddy 会自动申请证书：
 
 ```
 mail.example.com {
+    header {
+        X-Frame-Options "DENY"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer"
+    }
     handle /api/* { reverse_proxy 127.0.0.1:3000 }
     handle /t/*   { reverse_proxy 127.0.0.1:3000 }
     handle        { reverse_proxy 127.0.0.1:8080 }
 }
 ```
+
+这三行不是可选项：面板是纯后台，不该被任何页面 iframe（防点击劫持），也不该让浏览器猜内容类型。
+**用 CDN / WAF / 宝塔面板等其它入口时，在同一层把这三个响应头补上**——容器只监听 `127.0.0.1`，
+对外那一层才是唯一能加头的地方；漏了不会报错，只是少了这层保护。
 
 `APP_URL` 必须与实际访问地址一致（含协议）。填 `https://` 时会话 Cookie 才会带 `Secure`。
 
