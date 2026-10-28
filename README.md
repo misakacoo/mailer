@@ -69,6 +69,7 @@ docker compose up -d
 ```bash
 docker compose ps          # 四个服务都是 Up / healthy 即就绪
 docker compose logs -f api # 看到「已创建管理员账号：admin」即可，Ctrl-C 退出
+docker compose logs api | grep -A2 随机管理员密码   # 没设 ADMIN_PASSWORD 时，密码在这里
 ```
 
 ### 4. 打开面板
@@ -78,9 +79,15 @@ docker compose logs -f api # 看到「已创建管理员账号：admin」即可�
 
 ### 首次登录
 
-默认账号 **`admin`**，密码 **`admin`**。登录后顶部会出现一条提示，请立刻到「系统运维 → 管理员账号」修改。
+首次启动会创建管理员账号 `admin`，密码来源取决于 `.env`：
 
-> 默认密码是公开的，而这是一套能对外发信的系统——接入真实 SMTP 之前务必改掉。
+- **没填 `ADMIN_PASSWORD`（推荐）**：自动生成 20 位随机密码，只打印这一次，
+  用 `docker compose logs api | grep -A2 随机管理员密码` 找出来存好
+- **填了 `ADMIN_PASSWORD`**：就是它
+
+用自动生成的密码登录后，面板会强制你先改密码，改完才能进其他页面——所以拿到日志后第一步就是换成自己的。
+
+> 这套系统能对外发信，管理员口令等于发信权。别把 `.env` 或容器日志贴到公开的地方。
 
 ### 想基于源码部署？
 
