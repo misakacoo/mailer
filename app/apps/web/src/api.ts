@@ -94,7 +94,7 @@ export interface Alert {
 }
 
 export interface Overview {
-  today: { day: string; sent: number; opened: number; clicked: number; failed: number; newContacts: number };
+  today: { day: string; sent: number; opened: number; clicked: number; failed: number };
   quota: {
     /** 发件邮箱总数与可用数 */
     total: number;
@@ -112,14 +112,6 @@ export interface Overview {
     campaigns: number;
     activeCampaigns: number;
     doneCampaigns: number;
-  };
-  rates: {
-    windowDays: number;
-    settled: number;
-    delivered: number;
-    bounced: number;
-    opened: number;
-    clicked: number;
   };
   accounts: {
     id: number;

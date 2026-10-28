@@ -8,8 +8,8 @@ export class StatsController {
   constructor(private readonly stats: StatsService) {}
 
   @Get('overview')
-  overview(@Query('days', new DefaultValuePipe(30), ParseIntPipe) days: number) {
-    return this.stats.overview(Math.min(Math.max(days, 1), 365));
+  overview() {
+    return this.stats.overview();
   }
 
   @Get('trend')

@@ -23,31 +23,26 @@ export class StatsService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * 运营概览。
+   * 运营概览：只回答"今天发得动吗、有没有卡住"。
    *
-   * 两个窗口刻意分开：
-   * - 今日：配额是否够用，今天是干活的视角
-   * - 最近 N 天：送达率/打开率这类比率，太短没有统计意义
+   * 比率类指标（送达/退信/打开/点击）已经移到统计报表页，
+   * 那边按同一份趋势数据算，图表与数字天然对得上，这里不再重复查一遍。
    */
-  async overview(windowDays = 30) {
+  async overview() {
     const today = calendarDay();
     const todayStart = dayStartUtc(today);
     const tomorrowStart = dayStartUtc(addDays(today, 1));
-
-    const windowStart = dayStartUtc(addDays(today, -(windowDays - 1)));
 
     const [
       todaySent,
       todayOpened,
       todayClicked,
       todayFailed,
-      todayNewContacts,
       channels,
       campaignGroups,
       queueGroups,
       overdue,
       totalContacts,
-      windowRecipients,
       activeCampaigns,
     ] = await Promise.all([
       this.prisma.recipient.count({
@@ -66,7 +61,6 @@ export class StatsService {
           updatedAt: { gte: todayStart, lt: tomorrowStart },
         },
       }),
-      this.prisma.contact.count({ where: { createdAt: { gte: todayStart, lt: tomorrowStart } } }),
       this.prisma.channel.findMany({
         select: {
           id: true,
@@ -95,12 +89,6 @@ export class StatsService {
         where: { status: 'queued', nextAttemptAt: { lte: new Date() } },
       }),
       this.prisma.contact.count(),
-      // 窗口内的送达/失败，用于算送达率
-      this.prisma.recipient.groupBy({
-        by: ['status'],
-        where: { OR: [{ sentAt: { gte: windowStart } }, { updatedAt: { gte: windowStart } }] },
-        _count: { _all: true },
-      }),
       this.prisma.campaign.count({
         where: { deletedAt: null, status: { in: ['running', 'scheduled', 'paused'] } },
       }),
@@ -127,19 +115,6 @@ export class StatsService {
     const campaignCounts: Record<string, number> = {};
     for (const g of campaignGroups) campaignCounts[g.status] = g._count._all;
 
-    // 窗口内比率：分母只取"已经有结果"的投递，排队的不能算进送达率的分子或分母
-    let wSent = 0;
-    let wFailed = 0;
-    for (const g of windowRecipients) {
-      if (g.status === 'sent') wSent = g._count._all;
-      if (g.status === 'failed' || g.status === 'suppressed') wFailed += g._count._all;
-    }
-    const [windowOpened, windowClicked] = await Promise.all([
-      this.prisma.recipient.count({ where: { openedAt: { gte: windowStart } } }),
-      this.prisma.recipient.count({ where: { clickedAt: { gte: windowStart } } }),
-    ]);
-
-    const settled = wSent + wFailed;
 
     const alerts = this.buildAlerts({
       accounts: channels.map((c) => ({
@@ -165,7 +140,6 @@ export class StatsService {
         opened: todayOpened,
         clicked: todayClicked,
         failed: todayFailed,
-        newContacts: todayNewContacts,
       },
       quota: {
         total: channels.length,
@@ -191,14 +165,6 @@ export class StatsService {
         campaigns: [...campaignGroups].reduce((s, g) => s + g._count._all, 0),
         activeCampaigns,
         doneCampaigns: campaignCounts.done ?? 0,
-      },
-      rates: {
-        windowDays,
-        settled,
-        delivered: pct(wSent, settled),
-        bounced: pct(wFailed, settled),
-        opened: pct(windowOpened, wSent),
-        clicked: pct(windowClicked, wSent),
       },
       accounts: channels.map((c) => ({
         id: c.id,

@@ -4,6 +4,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { api, ChannelStat, TrendPoint } from '../api';
 import TrendChart from '../components/TrendChart';
 import Section from '../components/Section';
+import StatBand from '../components/StatBand';
 import PageHeader from '../components/PageHeader';
 import { metrics, tokens } from '../theme';
 
@@ -147,6 +148,23 @@ export default function Reports() {
 
   const failureTotal = failures.reduce((s, f) => s + f.count, 0);
 
+  // 效果指标与上方趋势图共用同一份数据，两者永远对得上；
+  // 分母为 0 时显示「—」——没发过信是"没有数据"，不是"零分"
+  const totals = trend.reduce(
+    (acc, p) => ({
+      sent: acc.sent + p.sent,
+      opened: acc.opened + p.opened,
+      clicked: acc.clicked + p.clicked,
+      failed: acc.failed + p.failed,
+    }),
+    { sent: 0, opened: 0, clicked: 0, failed: 0 },
+  );
+  const settled = totals.sent + totals.failed;
+  const rate = (n: number, d: number) =>
+    d > 0 ? { value: Math.round((n / d) * 1000) / 10, suffix: '%' } : { value: '—' as const };
+  const deliveredRate = settled > 0 ? (totals.sent / settled) * 100 : 0;
+  const bouncedRate = settled > 0 ? (totals.failed / settled) * 100 : 0;
+
   return (
     <div className="page">
       <PageHeader
@@ -157,7 +175,7 @@ export default function Reports() {
       {error && (
         <div
           style={{
-            padding: `14px ${metrics.cardPadding}px`,
+            padding: `${metrics.snug}px ${metrics.cardPadding}px`,
             border: `1px solid ${tokens.destructiveSoft}`,
             background: tokens.destructiveSoft,
             borderRadius: metrics.cardRadius,
@@ -168,6 +186,35 @@ export default function Reports() {
           {error}
         </div>
       )}
+
+      <Section title={`近 ${days} 天效果`}>
+        <StatBand
+          items={[
+            {
+              label: '送达率',
+              ...rate(totals.sent, settled),
+              tone: settled === 0 ? 'ink' : deliveredRate >= 95 ? 'success' : deliveredRate >= 85 ? 'ink' : 'destructive',
+              hint: `已送达 ${totals.sent} 封`,
+            },
+            {
+              label: '退信率',
+              ...rate(totals.failed, settled),
+              tone: bouncedRate >= 5 ? 'destructive' : 'ink',
+              hint: `退信 ${totals.failed} 封`,
+            },
+            {
+              label: '打开率',
+              ...rate(totals.opened, totals.sent),
+              hint: `打开 ${totals.opened} 人次`,
+            },
+            {
+              label: '点击率',
+              ...rate(totals.clicked, totals.sent),
+              hint: `点击 ${totals.clicked} 人次`,
+            },
+          ]}
+        />
+      </Section>
 
       <Section title={`发送趋势（近 ${days} 天）`}>
         <Card styles={{ body: { paddingTop: metrics.tight } }}>
@@ -194,8 +241,8 @@ export default function Reports() {
         </Card>
       </Section>
 
-    <Section title="失败原因分布" desc={`近 ${days} 天共 ${failureTotal} 封失败`}>
-      <Card>
+      <Section title="失败原因分布" desc={`近 ${days} 天共 ${failureTotal} 封失败`}>
+        <Card>
         {failures.length === 0 ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -213,7 +260,7 @@ export default function Reports() {
                       display: 'flex',
                       justifyContent: 'space-between',
                       fontSize: 12,
-                      marginBottom: 6,
+                      marginBottom: metrics.tight,
                       gap: metrics.snug,
                     }}
                   >
@@ -235,16 +282,8 @@ export default function Reports() {
             })}
           </div>
         )}
-      </Card>
-    </Section>
+        </Card>
+      </Section>
     </div>
   );
-}
-
-function formatDuration(sec: number): string {
-  if (sec < 60) return `${sec}s`;
-  const m = Math.floor(sec / 60);
-  if (m < 60) return `${m}m${sec % 60 ? `${sec % 60}s` : ''}`;
-  const h = Math.floor(m / 60);
-  return `${h}h${m % 60 ? `${m % 60}m` : ''}`;
 }
