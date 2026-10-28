@@ -154,7 +154,7 @@ export class SenderService {
     } catch (e: any) {
       // 渲染、附件读取、凭据解密都会在这里抛。以前没有这层 try，
       // 一旦抛出这一行就永远卡在 sending、attempts 也不增加，任务无限空转。
-      await this.recordSendException(claimed, campaign.id, e);
+      await this.recordSendException(claimed, campaign.id, e, channel.id);
       return {
         action: 'retry',
         waitMs: Math.max(1000, this.computeWait(campaign)),
@@ -205,7 +205,7 @@ export class SenderService {
     if (permanent) {
       const missing = isAddressMissing(result.message);
       if (missing) {
-        await this.failPermanently(claimed, result.message, `SMTP_${result.responseCode}`);
+        await this.failPermanently(claimed, result.message, `SMTP_${result.responseCode}`, channel.id);
         log.warn(
           { recipientId: claimed.id, email: claimed.email, code: result.responseCode },
           '地址不存在，已加入抑制名单',
@@ -215,7 +215,7 @@ export class SenderService {
         });
       } else {
         // 535 认证失败、552 邮箱已满、554 策略拒收：地址本身有效，拉黑会误伤真实收件人
-        await this.markFailed(claimed, `SMTP_${result.responseCode}`, result.message);
+        await this.markFailed(claimed, `SMTP_${result.responseCode}`, result.message, channel.id);
         log.warn(
           { recipientId: claimed.id, code: result.responseCode, message: result.message },
           '通道或策略拒收，本条判失败但地址不拉黑',
@@ -325,7 +325,7 @@ export class SenderService {
   }
 
   /** 通道/策略层面的永久失败：这条明细判死，但不动抑制名单 */
-  private async markFailed(claimed: ClaimedRow, code: string, message: string) {
+  private async markFailed(claimed: ClaimedRow, code: string, message: string, channelId?: number) {
     await this.prisma.recipient.updateMany({
       where: { id: claimed.id, status: 'sending' },
       data: {
@@ -334,6 +334,9 @@ export class SenderService {
         errorCode: code,
         errorMessage: message.slice(0, 500),
         leaseUntil: null,
+        // 记上通道：报表的「账号表现」按 channelId 归集失败，
+        // 不写这一列的话每个账号的成功率都会显示 100%
+        ...(channelId ? { channelId } : {}),
       },
     });
   }
@@ -343,7 +346,7 @@ export class SenderService {
    * 关键点是：无论什么异常，这一行都不能留在 sending，且 attempts 必须推进一次，
    * 否则它会每 5 分钟被回收、再卡住，任务永远结束不了。
    */
-  private async recordSendException(claimed: ClaimedRow, campaignId: number, e: any) {
+  private async recordSendException(claimed: ClaimedRow, campaignId: number, e: any, channelId?: number) {
     const nextAttempts = claimed.attempts + 1;
     const exhausted = nextAttempts > MAX_RETRIES;
     const delaySec = RETRY_BACKOFF_SEC[nextAttempts - 1] ?? RETRY_BACKOFF_SEC[RETRY_BACKOFF_SEC.length - 1];
@@ -356,6 +359,7 @@ export class SenderService {
         leaseUntil: null,
         errorCode: 'SEND_EXCEPTION',
         errorMessage: String(e?.message ?? e).slice(0, 500),
+        ...(channelId ? { channelId } : {}),
       },
     });
     log.error(
@@ -369,7 +373,7 @@ export class SenderService {
    * 永久失败：进抑制名单，以后任何任务都不会再发到这个地址。
    * 抑制是幂等的，重复写入不报错。
    */
-  private async failPermanently(claimed: ClaimedRow, message: string, code: string) {
+  private async failPermanently(claimed: ClaimedRow, message: string, code: string, channelId?: number) {
     // 地址确实不可用，抑制照写；但只有还处于 sending 的明细才改状态，
     // 避免把用户刚取消的那一行从 canceled 改成 failed
     await this.prisma.recipient.updateMany({
@@ -380,6 +384,7 @@ export class SenderService {
         errorCode: code,
         errorMessage: message,
         leaseUntil: null,
+        ...(channelId ? { channelId } : {}),
       },
     });
     await this.prisma.suppression
