@@ -170,16 +170,16 @@ mail.example.com {
 镜像默认 `latest`（跟随 main）。**生产环境建议钉到具体版本**，避免某次 `docker compose pull` 把线上换成没测过的构建——在 `.env` 里加两行：
 
 ```bash
-MAILER_IMAGE=ghcr.io/misakacoo/mailer:v1.0.0
-MAILER_WEB_IMAGE=ghcr.io/misakacoo/mailer-web:v1.0.0
+MAILER_IMAGE=ghcr.io/misakacoo/mailer:v1.1.0
+MAILER_WEB_IMAGE=ghcr.io/misakacoo/mailer-web:v1.1.0
 ```
 
 升级就是改这两个值再重建：
 
 ```bash
-# 发新版本后，例如升到 v1.1.0：
-sed -i 's#^MAILER_IMAGE=.*#MAILER_IMAGE=ghcr.io/misakacoo/mailer:v1.1.0#' .env
-sed -i 's#^MAILER_WEB_IMAGE=.*#MAILER_WEB_IMAGE=ghcr.io/misakacoo/mailer-web:v1.1.0#' .env
+# 发新版本后，只改版本号再重建（下面以升到 v1.2.0 为例）：
+sed -i 's#^MAILER_IMAGE=.*#MAILER_IMAGE=ghcr.io/misakacoo/mailer:v1.2.0#' .env
+sed -i 's#^MAILER_WEB_IMAGE=.*#MAILER_WEB_IMAGE=ghcr.io/misakacoo/mailer-web:v1.2.0#' .env
 docker compose pull && docker compose up -d
 ```
 
