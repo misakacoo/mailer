@@ -63,6 +63,15 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
     }
   }
 
+  // 服务端在「必须改密」时对业务接口一律 403。与其让每个页面弹一句"请先修改初始密码"，
+  // 不如直接把用户送到改密页——这是新装第一次登录必经的一步。
+  if (res.status === 403) {
+    const m = typeof payload?.message === 'string' ? payload.message : '';
+    if (m.includes('请先修改初始密码') && window.location.pathname !== '/account') {
+      window.location.replace('/account');
+    }
+  }
+
   if (!res.ok) {
     const msg =
       (payload && (payload.message || payload.error)) ||

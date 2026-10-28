@@ -177,8 +177,8 @@ mail.example.com {
 镜像默认 `latest`（跟随 main）。**生产环境建议钉到具体版本**，避免某次 `docker compose pull` 把线上换成没测过的构建——在 `.env` 里加两行：
 
 ```bash
-MAILER_IMAGE=ghcr.io/misakacoo/mailer:v1.1.1
-MAILER_WEB_IMAGE=ghcr.io/misakacoo/mailer-web:v1.1.1
+MAILER_IMAGE=ghcr.io/misakacoo/mailer:v1.1.2
+MAILER_WEB_IMAGE=ghcr.io/misakacoo/mailer-web:v1.1.2
 ```
 
 升级就是改这两个值再重建：

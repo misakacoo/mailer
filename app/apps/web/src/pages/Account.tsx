@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { App as AntApp, Button, Card, Col, Form, Input, Row } from 'antd';
 import dayjs from 'dayjs';
-import { api } from '../api';
+import { api, resetMeCache } from '../api';
 import PageHeader from '../components/PageHeader';
 import Section from '../components/Section';
 import { metrics, tokens } from '../theme';
@@ -52,10 +52,18 @@ export default function Account() {
           newPassword: v.newPassword || undefined,
         }),
       });
+      const wasForced = Boolean(info?.mustChangePassword);
       setInfo(r);
       form.setFieldsValue({ account: r.account });
       form.resetFields(['currentPassword', 'newPassword', 'confirmPassword']);
       message.success('已保存，下次登录请使用新凭据');
+
+      // 首次改密：服务端已经不再拦人，前端缓存里还记着"要改密"，
+      // 不刷新就会一直顶着那条提示条。整页重载最省事也最不会漏状态。
+      if (wasForced && !r.mustChangePassword) {
+        resetMeCache();
+        window.location.replace('/');
+      }
     } catch (e: any) {
       message.error(e?.message ?? '保存失败');
     } finally {

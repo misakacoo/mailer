@@ -34,7 +34,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
   const { message } = AntApp.useApp();
   const [mustChange, setMustChange] = useState(false);
 
-  // 初始密码是 admin/admin，分发出去的系统如果不提醒，很多人会一直不改
+  // 首次安装生成的密码要么在 .env 里、要么只打印过一次容器日志，都该尽快换掉
   useEffect(() => {
     fetchMeCached<{ mustChangePassword?: boolean }>()
       .then((r) => setMustChange(Boolean(r?.mustChangePassword)))
@@ -165,7 +165,7 @@ export default function Shell({ onLogout }: { onLogout: () => void }) {
               color: tokens.warning,
             }}
           >
-            当前仍在使用初始密码，任何知道默认账号的人都能登录。
+            当前仍在使用安装时生成的密码，改成自己的口令才算真正锁上门。
             <Button type="link" size="small" onClick={() => nav('/account')} style={{ padding: '0 4px' }}>
               立即修改
             </Button>
